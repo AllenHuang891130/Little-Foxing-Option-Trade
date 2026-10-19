@@ -84,6 +84,7 @@ def list_items(folder=""):
     return response.json()
 
 
+
 def upload_file(path, content, content_type=None):
     """Upload or overwrite one research file."""
     path = clean_path(path)
@@ -113,13 +114,19 @@ def upload_file(path, content, content_type=None):
         timeout=(10, 90),
     )
 
-    response.raise_for_status()
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"Supabase upload failed: "
+            f"HTTP {response.status_code} | "
+            f"{response.text[:1000]}"
+        )
 
     return {
         "path": path,
         "size": len(content),
         "content_type": mime,
     }
+
 
 
 def download_file(path):
