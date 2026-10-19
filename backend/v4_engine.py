@@ -12,6 +12,53 @@ from scipy.optimize import brentq
 from scipy.stats import norm
 plt.rcParams.update({'font.family':'DejaVu Sans','axes.unicode_minus':False,'figure.dpi':110})
 ROOT=Path(os.environ.get('TAIFEX_DATA_DIR',str(Path(__file__).resolve().parent/'taifex_data'))); ROOT.mkdir(parents=True,exist_ok=True)
+
+# ============================================================
+# Supabase persistent cache - V4
+# ============================================================
+import logging
+
+try:
+    from cloud_cache import download_cache, upload_cache
+    CLOUD_CACHE_AVAILABLE = True
+except ImportError as exc:
+    CLOUD_CACHE_AVAILABLE = False
+    logging.warning("Cloud cache module unavailable: %s", exc)
+
+
+def restore_cloud_cache(path, force=False):
+    """Restore a CSV from Supabase when local cache is absent."""
+    path = Path(path)
+
+    if force or path.exists() or not CLOUD_CACHE_AVAILABLE:
+        return False
+
+    try:
+        return download_cache(path)
+    except Exception:
+        logging.exception("Supabase cache download failed: %s", path.name)
+        return False
+
+
+def save_cloud_cache(path):
+    """Upload a completed local CSV to Supabase."""
+    path = Path(path)
+
+    if not CLOUD_CACHE_AVAILABLE:
+        logging.warning("Cloud cache unavailable: %s", path.name)
+        return False
+
+    if not path.is_file():
+        logging.warning("Cache file does not exist: %s", path)
+        return False
+
+    try:
+        upload_cache(path)
+        return True
+    except Exception:
+        logging.exception("Supabase cache upload failed: %s", path.name)
+        return False
+
 RF=0.015
 API='https://openapi.taifex.com.tw/v1/'
 HIST='https://www.taifex.com.tw/cht/3/'
@@ -501,6 +548,7 @@ def load_market_session(ds,session='day',force=False):
     ds=pd.Timestamp(ds).strftime('%Y%m%d')
     if session not in ('day','night'):raise ValueError('session must be day or night')
     path=ROOT/f'TXO_MTX_{ds}_{session.upper()}.csv'
+    restore_cloud_cache(path, force=force)
     if path.exists() and not force:
         d=pd.read_csv(path,dtype={'expiry':str})
         for col in ['date','expiry_date','official_expiry_date']:
@@ -526,6 +574,7 @@ def load_market_session(ds,session='day',force=False):
     o=recalculate_iv(o)
     o['OTM']=np.where(o.cp.eq('Call'),o.strike>=o.F,o.strike<=o.F)
     o.to_csv(path,index=False,encoding='utf-8-sig')
+    save_cloud_cache(path)
     print(f'Saved {path} | valid IV {o.IV.notna().sum():,}/{len(o):,}')
     return o
 
