@@ -9,13 +9,18 @@ const modes:{id:Mode;label:string}[]=[
  {id:'daynight',label:'Day vs Night'}
 ];
 type Result={image:string;meta:Record<string,unknown>;note:string};
-function apiBase(){
- const configured=process.env.NEXT_PUBLIC_API_URL?.trim().replace(/\/$/,'');
- if(configured)return configured;
- if(typeof window==='undefined')return 'http://127.0.0.1:8000';
- // Connect to the Python server on the SAME machine as the Next.js frontend.
- return `${window.location.protocol}//${window.location.hostname}:8000`;
+
+function apiBase() {
+  const configured = process.env.NEXT_PUBLIC_API_BASE_URL
+    ?.trim()
+    .replace(/\/$/, '');
+
+  if (configured) return configured;
+
+  // Local development fallback
+  return 'http://localhost:8000';
 }
+
 export default function Options(){
  const [mode,setMode]=useState<Mode>('daynight');
  const [date1,setDate1]=useState('2026-10-16');
