@@ -75,7 +75,12 @@ def list_items(folder=""):
         timeout=(10, 45),
     )
 
-    response.raise_for_status()
+    if response.status_code >= 400:
+    raise RuntimeError(
+        f"Supabase upload failed: "
+        f"HTTP {response.status_code} | "
+        f"{response.text[:1000]}"
+    )
     return response.json()
 
 
