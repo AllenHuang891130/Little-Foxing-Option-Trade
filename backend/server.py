@@ -198,12 +198,12 @@ def research_list(
             "folder": folder,
             "items": research.list_items(folder)
         }
-    except Exception:
-        logging.exception("Research list failed")
+    except Exception as exc:
+        logging.exception("Research upload failed")
         raise HTTPException(
-            500,
-            "Unable to list research files"
-        )
+            status_code=500,
+            detail=f"Research upload error: {type(exc).__name__}: {str(exc)[:500]}"
+        ) from exc
 
 
 @app.post("/research/upload")
