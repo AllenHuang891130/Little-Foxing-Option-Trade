@@ -187,23 +187,19 @@ class ResearchDelete(BaseModel):
 
 
 @app.get("/research/files")
-def research_list(
-    folder: str = "",
-    x_research_password: str | None = Header(default=None)
-):
-    verify_research_password(x_research_password)
-
+def research_list(folder: str = ""):
     try:
         return {
             "folder": folder,
-            "items": research.list_items(folder)
+            "items": research.list_items(folder),
         }
-    except Exception as exc:
-        logging.exception("Research upload failed")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception("Research list failed")
         raise HTTPException(
-            status_code=500,
-            detail=f"Research upload error: {type(exc).__name__}: {str(exc)[:500]}"
-        ) from exc
+            500, "Unable to list research files"
+        )
 
 
 @app.post("/research/upload")
@@ -317,13 +313,9 @@ def research_delete(
         )
 
 
-@app.get("/research/download")
-def research_download(
-    path: str,
-    x_research_password: str | None = Header(default=None)
-):
-    verify_research_password(x_research_password)
 
+@app.get("/research/download")
+def research_download(path: str):
     try:
         from fastapi.responses import Response
 
@@ -333,7 +325,6 @@ def research_download(
             raise ValueError("File path is required")
 
         content = research.download_file(path)
-
         filename = PurePosixPath(path).name
 
         return Response(
@@ -343,7 +334,7 @@ def research_download(
                 "Content-Disposition":
                     f"attachment; filename*=UTF-8''{quote(filename)}",
                 "Cache-Control": "no-store",
-            }
+            },
         )
 
     except ValueError as exc:
@@ -351,6 +342,6 @@ def research_download(
     except Exception:
         logging.exception("Research download failed")
         raise HTTPException(
-            500,
-            "Unable to download research file"
+            500, "Unable to download research file"
         )
+
