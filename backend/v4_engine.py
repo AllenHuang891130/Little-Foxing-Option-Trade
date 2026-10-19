@@ -291,24 +291,95 @@ def recalculate_iv(d):
              else np.nan for px,f,k,t,cp,dte in zip(d['price'],d['F'],d['strike'],d['T'],d['cp'],d['DTE'])]
     return d
 
+
 def build_day(ds):
-    ds=pd.Timestamp(ds).strftime('%Y%m%d')
-    if ds==pd.Timestamp.today().strftime('%Y%m%d'):
-        ro,rf=openapi_csv('DailyMarketReportOpt'),openapi_csv('DailyMarketReportFut')
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    ds = pd.Timestamp(ds).strftime('%Y%m%d')
+    taiwan_today = datetime.now(
+        ZoneInfo('Asia/Taipei')
+    ).strftime('%Y%m%d')
+
+    if ds == taiwan_today:
+        logging.warning(
+            "[DATA] %s is Taiwan today; trying OpenAPI",
+            ds
+        )
+
+        ro = openapi_csv('DailyMarketReportOpt')
+        rf = openapi_csv('DailyMarketReportFut')
+
+        try:
+            o = normalize_opt(ro, ds)
+            f = normalize_fut(rf, ds)
+        except ValueError as exc:
+            logging.warning(
+                "[DATA] OpenAPI unusable for %s: %s; "
+                "trying historical CSV",
+                ds, exc
+            )
+
+            ro = historical_csv('opt', ds)
+            rf = historical_csv('fut', ds)
+
+            o = normalize_opt(ro, ds)
+            f = normalize_fut(rf, ds)
+
     else:
-        ro,rf=historical_csv('opt',ds),historical_csv('fut',ds)
-    o,f=normalize_opt(ro,ds),normalize_fut(rf,ds)
-    fm=f.set_index('expiry')['F'].to_dict()
-    monthly={str(k)[:6]:v for k,v in fm.items() if re.fullmatch(r'\d{6}',str(k))}
-    o['F']=o['expiry'].map(fm)
-    o['forward_source']=np.where(o['F'].notna(),'Exact MTX','Monthly MTX proxy')
-    o['F']=o['F'].fillna(o['expiry'].str[:6].map(monthly))
-    o['moneyness']=o['strike']/o['F']-1
-    o['price']=o['settle'].where(o['settle']>0,o['last'])
-    o=recalculate_iv(o)
-    o['OTM']=np.where(o.cp.eq('Call'),o.strike>=o.F,o.strike<=o.F)
-    if o['F'].notna().sum()==0:raise ValueError('No valid futures forward; IV cannot be computed')
+        logging.warning(
+            "[DATA] %s is historical; using historical CSV",
+            ds
+        )
+
+        ro = historical_csv('opt', ds)
+        rf = historical_csv('fut', ds)
+
+        o = normalize_opt(ro, ds)
+        f = normalize_fut(rf, ds)
+
+    fm = f.set_index('expiry')['F'].to_dict()
+
+    monthly = {
+        str(k)[:6]: v
+        for k, v in fm.items()
+        if re.fullmatch(r'\d{6}', str(k))
+    }
+
+    o['F'] = o['expiry'].map(fm)
+
+    o['forward_source'] = np.where(
+        o['F'].notna(),
+        'Exact MTX',
+        'Monthly MTX proxy'
+    )
+
+    o['F'] = o['F'].fillna(
+        o['expiry'].str[:6].map(monthly)
+    )
+
+    o['moneyness'] = o['strike'] / o['F'] - 1
+
+    o['price'] = o['settle'].where(
+        o['settle'] > 0,
+        o['last']
+    )
+
+    o = recalculate_iv(o)
+
+    o['OTM'] = np.where(
+        o.cp.eq('Call'),
+        o.strike >= o.F,
+        o.strike <= o.F
+    )
+
+    if o['F'].notna().sum() == 0:
+        raise ValueError(
+            'No valid futures forward; IV cannot be computed'
+        )
+
     return o
+
 
 
 
