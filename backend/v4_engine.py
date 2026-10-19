@@ -310,23 +310,59 @@ def build_day(ds):
     if o['F'].notna().sum()==0:raise ValueError('No valid futures forward; IV cannot be computed')
     return o
 
-def load_day(ds,force=False):
-    ds=pd.Timestamp(ds).strftime('%Y%m%d');path=ROOT/f'TXO_MTX_{ds}.csv'
+
+def load_day(ds, force=False):
+    ds = pd.Timestamp(ds).strftime('%Y%m%d')
+    path = ROOT / f'TXO_MTX_{ds}.csv'
+
+    # 1. Try restoring the cached file from Supabase.
+    if not force:
+        restore_cloud_cache(path, force=False)
+
+    # 2. Reuse local cache and synchronize it to Supabase.
     if path.exists() and not force:
-        d=pd.read_csv(path,dtype={'expiry':str})
-        for c in ['date','expiry_date','official_expiry_date']:
-            if c in d:d[c]=pd.to_datetime(d[c],errors='coerce')
-        for c in ['strike','oi','volume','IV','F','DTE','moneyness','bid','ask','price','T']:
-            if c in d:d[c]=pd.to_numeric(d[c],errors='coerce')
-        if 'OTM' in d:d['OTM']=d['OTM'].astype(str).str.lower().eq('true')
-        needed={'expiry','strike','cp','oi','volume','F','moneyness','price','date'}
-        if not needed.issubset(d.columns):raise ValueError(f'Cached file {path} missing: {needed-set(d.columns)}')
-        # Recompute IV for all cached days, including old caches with invalid IV.
-        d=recalculate_iv(d)
+        save_cloud_cache(path)
+
+        d = pd.read_csv(path, dtype={'expiry': str})
+
+        for c in ['date', 'expiry_date', 'official_expiry_date']:
+            if c in d:
+                d[c] = pd.to_datetime(d[c], errors='coerce')
+
+        for c in [
+            'strike', 'oi', 'volume', 'IV', 'F', 'DTE',
+            'moneyness', 'bid', 'ask', 'price', 'T'
+        ]:
+            if c in d:
+                d[c] = pd.to_numeric(d[c], errors='coerce')
+
+        if 'OTM' in d:
+            d['OTM'] = d['OTM'].astype(str).str.lower().eq('true')
+
+        needed = {
+            'expiry', 'strike', 'cp', 'oi', 'volume',
+            'F', 'moneyness', 'price', 'date'
+        }
+
+        if not needed.issubset(d.columns):
+            raise ValueError(
+                f'Cached file {path} missing: {needed - set(d.columns)}'
+            )
+
+        # Preserve the original V4 IV recalculation.
+        d = recalculate_iv(d)
         return d
-    d=build_day(ds)
-    d.to_csv(path,index=False,encoding='utf-8-sig');print('Saved',path)
+
+    # 3. No usable cache: download and process TAIFEX data.
+    d = build_day(ds)
+
+    # 4. Save locally, then upload to Supabase.
+    d.to_csv(path, index=False, encoding='utf-8-sig')
+    save_cloud_cache(path)
+
+    print('Saved', path)
     return d
+
 print('Market data functions loaded.')
 
 # From V4 notebook cell 5
