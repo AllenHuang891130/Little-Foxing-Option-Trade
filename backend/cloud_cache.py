@@ -36,26 +36,69 @@ def _headers(key):
     return {"apikey": key, "Authorization": f"Bearer {key}"}
 
 
-def download_cache(local_path):
-    """Download existing CSV to local_path; return True on hit, False on 404.
 
-    Other errors are raised so callers can log and use the original data path.
-    """
+def download_cache(local_path):
+    """Download a cached CSV from private Supabase Storage."""
     url, key = _config()
     local_path = Path(local_path)
     object_key = quote(_object_key(local_path.name), safe="/")
-    endpoint = f"{url}/storage/v1/object/authenticated/{BUCKET}/{object_key}"
-    response = requests.get(endpoint, headers=_headers(key), timeout=(10, 45))
+
+    endpoint = (
+        f"{url}/storage/v1/object/authenticated/"
+        f"{BUCKET}/{object_key}"
+    )
+
+    response = requests.get(
+        endpoint,
+        headers=_headers(key),
+        timeout=(10, 45),
+    )
+
+    # Show the actual Supabase error, without printing credentials.
+    if response.status_code >= 400:
+        logging.warning(
+            "Supabase download response: status=%s file=%s body=%s",
+            response.status_code,
+            local_path.name,
+            response.text[:500],
+        )
+
     if response.status_code == 404:
-        logging.info("Supabase cache MISS: %s", object_key)
         return False
+
+    # Supabase Storage may report a missing object as HTTP 400.
+    if response.status_code == 400:
+        try:
+            error = response.json()
+        except ValueError:
+            error = {}
+
+        code = str(error.get("error", "")).lower()
+        message = str(error.get("message", "")).lower()
+
+        if (
+            "not_found" in code
+            or "nosuchkey" in code
+            or "object not found" in message
+            or "not found" in message
+        ):
+            logging.info("Supabase cache MISS: %s", object_key)
+            return False
+
     response.raise_for_status()
+
     if not response.content:
         raise ValueError("Empty cloud cache response")
+
     local_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = local_path.with_name(local_path.name + ".download")
+
+    temporary = local_path.with_name(
+        local_path.name + ".download"
+    )
+
     temporary.write_bytes(response.content)
     temporary.replace(local_path)
+
     logging.info("Supabase cache HIT: %s", object_key)
     return True
 
