@@ -1,371 +1,618 @@
 
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  BookOpen, Search, Folder, FolderPlus, Upload,
-  FileText, Download, Trash2, Pencil, ArrowLeft,
-  Home, FolderOpen, MoveRight
+  ArrowLeft, Download, FileText, Folder, FolderPlus,
+  Home, LockKeyhole, LogOut, Pencil, RefreshCw,
+  Search, Trash2, Upload
 } from 'lucide-react';
 
-type Item = {
-  id: string;
+const API = 'https://little-foxing-option-trade.onrender.com';
+
+type StorageItem = {
   name: string;
-  parentId: string | null;
-  type: 'folder' | 'file';
-  file?: File;
+  id?: string | null;
+  metadata?: {
+    size?: number;
+    mimetype?: string;
+  } | null;
 };
 
+function joinPath(folder: string, name: string) {
+  return folder ? `${folder}/${name}` : name;
+}
+
+function getError(data: unknown, status: number): string {
+  if (data && typeof data === 'object' && 'detail' in data) {
+    return String((data as { detail: unknown }).detail);
+  }
+  return `Request failed (${status})`;
+}
+
 export default function Research() {
-  const [items, setItems] = useState<Item[]>([]);
-  const [currentFolder, setCurrentFolder] = useState<string | null>(null);
+  const [password, setPassword] = useState('');
+  const [unlocked, setUnlocked] = useState(false);
+  const [folder, setFolder] = useState('');
+  const [items, setItems] = useState<StorageItem[]>([]);
   const [search, setSearch] = useState('');
-  const fileInput = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const makeId = () =>
-    crypto.randomUUID();
+  const request = useCallback(
+    async (path: string, init: RequestInit = {}) => {
+      const response = await fetch(`${API}${path}`, {
+        ...init,
+        headers: {
+          'X-Research-Password': password,
+          ...(init.headers || {})
+        },
+        cache: 'no-store'
+      });
 
-  const folder = items.find(
-    x => x.id === currentFolder && x.type === 'folder'
+      if (!response.ok) {
+        let data: unknown = null;
+        try {
+          data = await response.json();
+        } catch {
+          // Keep the HTTP status if the response is not JSON.
+        }
+
+        throw new Error(getError(data, response.status));
+      }
+
+      return response;
+    },
+    [password]
   );
 
-  const visible = useMemo(() => {
-    if (search.trim()) {
-      return items.filter(x =>
-        x.name.toLowerCase().includes(search.toLowerCase())
-      );
-    }
+  const load = useCallback(
+    async (target = folder) => {
+      setBusy(true);
+      setError('');
 
-    return items.filter(x => x.parentId === currentFolder);
-  }, [items, currentFolder, search]);
+      try {
+        const response = await request(
+          `/research/files?folder=${encodeURIComponent(target)}`
+        );
+        const data = await response.json();
 
-  const folders = items.filter(x => x.type === 'folder');
+        const result: StorageItem[] = Array.isArray(data.items)
+          ? data.items
+          : [];
 
-  function addFolder() {
-    const name = window.prompt('請輸入資料夾名稱');
-    if (!name?.trim()) return;
-
-    setItems(prev => [...prev, {
-      id: makeId(),
-      name: name.trim(),
-      parentId: currentFolder,
-      type: 'folder'
-    }]);
-  }
-
-  function uploadFiles(files: FileList | null) {
-    if (!files) return;
-
-    const added: Item[] = Array.from(files).map(file => ({
-      id: makeId(),
-      name: file.name,
-      parentId: currentFolder,
-      type: 'file',
-      file
-    }));
-
-    setItems(prev => [...prev, ...added]);
-  }
-
-  function renameItem(item: Item) {
-    const name = window.prompt('重新命名', item.name);
-    if (!name?.trim()) return;
-
-    setItems(prev => prev.map(x =>
-      x.id === item.id ? { ...x, name: name.trim() } : x
-    ));
-  }
-
-  function deleteItem(item: Item) {
-    if (!window.confirm(`確定刪除「${item.name}」？`)) return;
-
-    setItems(prev => {
-      const removed = new Set([item.id]);
-
-      if (item.type === 'folder') {
-        let changed = true;
-
-        while (changed) {
-          changed = false;
-
-          for (const x of prev) {
-            if (
-              x.parentId &&
-              removed.has(x.parentId) &&
-              !removed.has(x.id)
-            ) {
-              removed.add(x.id);
-              changed = true;
-            }
-          }
-        }
+        setItems(
+          result.filter(item =>
+            item.name !== '.folder' &&
+            item.name !== '.emptyFolderPlaceholder'
+          )
+        );
+        setFolder(target);
+        setUnlocked(true);
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : 'Unable to load files'
+        );
+      } finally {
+        setBusy(false);
       }
+    },
+    [folder, request]
+  );
 
-      return prev.filter(x => !removed.has(x.id));
-    });
+  async function unlock(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!password.trim()) return;
+    await load('');
   }
 
-  function downloadItem(item: Item) {
-    if (!item.file) return;
+  useEffect(() => {
+    if (!unlocked) return;
 
-    const url = URL.createObjectURL(item.file);
-    const a = document.createElement('a');
+    // Reload when navigating to a new folder.
+    void load(folder);
+    // Folder navigation is initiated by the UI.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [folder]);
 
-    a.href = url;
-    a.download = item.name;
-    a.click();
-
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  function logout() {
+    setPassword('');
+    setUnlocked(false);
+    setFolder('');
+    setItems([]);
+    setSearch('');
+    setError('');
+    setMessage('');
   }
 
-  function openItem(item: Item) {
-    if (item.type === 'folder') {
-      setCurrentFolder(item.id);
-      setSearch('');
-      return;
+  async function perform(
+    action: () => Promise<void>,
+    successMessage: string
+  ) {
+    setBusy(true);
+    setError('');
+    setMessage('');
+
+    try {
+      await action();
+      setMessage(successMessage);
+      await load(folder);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Operation failed'
+      );
+    } finally {
+      setBusy(false);
     }
-
-    if (!item.file) return;
-
-    const url = URL.createObjectURL(item.file);
-    window.open(url, '_blank', 'noopener,noreferrer');
-
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
   }
 
-  function moveItem(item: Item) {
-    const choices = [
-      'ROOT：根目錄',
-      ...folders
-        .filter(x => x.id !== item.id)
-        .map(x => `${x.id}：${x.name}`)
-    ];
+  function createFolder() {
+    const name = window.prompt('New folder name:')?.trim();
 
-    const choice = window.prompt(
-      '輸入目標資料夾 ID，或輸入 ROOT 移至根目錄：\n\n' +
-      choices.join('\n')
-    );
-
-    if (choice === null) return;
-
-    const target = choice.trim();
-    const parentId = target.toUpperCase() === 'ROOT'
-      ? null
-      : target;
+    if (!name) return;
 
     if (
-      parentId !== null &&
-      !folders.some(x => x.id === parentId)
+      name === '.' ||
+      name === '..' ||
+      name.includes('/') ||
+      name.includes('\\')
     ) {
-      alert('找不到目標資料夾');
+      setError('Invalid folder name');
       return;
     }
 
-    if (item.type === 'folder' && parentId) {
-      let ancestor: string | null = parentId;
-
-      while (ancestor) {
-        if (ancestor === item.id) {
-          alert('不能把資料夾移到自己的子資料夾');
-          return;
-        }
-
-        ancestor = items.find(x => x.id === ancestor)?.parentId ?? null;
-      }
-    }
-
-    setItems(prev => prev.map(x =>
-      x.id === item.id ? { ...x, parentId } : x
-    ));
+    void perform(
+      async () => {
+        await request('/research/folder', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            path: joinPath(folder, name)
+          })
+        });
+      },
+      'Folder created successfully'
+    );
   }
 
-  const countFiles = items.filter(x => x.type === 'file').length;
+  async function uploadFiles(files: FileList | null) {
+    if (!files?.length) return;
+
+    await perform(
+      async () => {
+        for (const file of Array.from(files)) {
+          if (file.size > 25 * 1024 * 1024) {
+            throw new Error(
+              `${file.name} exceeds the 25 MB file limit`
+            );
+          }
+
+          const body = new FormData();
+          body.append('file', file);
+          body.append('folder', folder);
+
+          await request('/research/upload', {
+            method: 'POST',
+            body
+          });
+        }
+      },
+      'Files uploaded successfully'
+    );
+  }
+
+  async function downloadFile(item: StorageItem) {
+    setBusy(true);
+    setError('');
+
+    try {
+      const path = joinPath(folder, item.name);
+
+      const response = await request(
+        `/research/download?path=${encodeURIComponent(path)}`
+      );
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+
+      link.href = url;
+      link.download = item.name;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Download failed'
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function renameFile(item: StorageItem) {
+    const name = window.prompt('New file name:', item.name)?.trim();
+
+    if (!name || name === item.name) return;
+
+    if (
+      name === '.' ||
+      name === '..' ||
+      name.includes('/') ||
+      name.includes('\\')
+    ) {
+      setError('Invalid file name');
+      return;
+    }
+
+    void perform(
+      async () => {
+        await request('/research/move', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            source: joinPath(folder, item.name),
+            destination: joinPath(folder, name)
+          })
+        });
+      },
+      'File renamed successfully'
+    );
+  }
+
+  function deleteFile(item: StorageItem) {
+    if (!window.confirm(`Delete "${item.name}" permanently?`)) {
+      return;
+    }
+
+    void perform(
+      async () => {
+        await request('/research/files', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            paths: [joinPath(folder, item.name)]
+          })
+        });
+      },
+      'File deleted successfully'
+    );
+  }
+
+  const visible = items
+    .filter(item =>
+      item.name.toLowerCase().includes(search.toLowerCase())
+    )
+    .sort((a, b) => {
+      const aFolder = a.id == null;
+      const bFolder = b.id == null;
+
+      if (aFolder !== bFolder) return aFolder ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+  const buttonStyle: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 7,
+    padding: '9px 12px',
+    border: '1px solid var(--border, #8885)',
+    borderRadius: 9,
+    background: 'transparent',
+    color: 'inherit',
+    cursor: 'pointer',
+    fontSize: 13
+  };
+
+  const iconButton: React.CSSProperties = {
+    ...buttonStyle,
+    padding: 8
+  };
 
   return (
     <>
       <div className="eyebrow">KNOWLEDGE / LITERATURE</div>
       <h1 className="pagetitle">Research Library</h1>
       <p className="subtitle">
-        管理研究論文、交易策略、回測報告與個人筆記。
+        Your private workspace for academic papers, trading
+        strategies, research reports, and notes.
       </p>
 
-      <div
-        className="panel"
-        style={{
-          padding: 16,
-          marginBottom: 16,
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 10,
-          alignItems: 'center',
-          justifyContent: 'space-between'
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <BookOpen size={19} />
-          <strong>我的研究資料</strong>
-          <span className="muted small">
-            {folders.length} 個資料夾 · {countFiles} 個檔案
-          </span>
-        </div>
+      {!unlocked ? (
+        <div
+          className="panel"
+          style={{
+            padding: 28,
+            maxWidth: 460,
+            margin: '30px auto'
+          }}
+        >
+          <LockKeyhole size={30} />
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            onClick={addFolder}
-            style={buttonStyle}
-          >
-            <FolderPlus size={16} />
-            新增資料夾
-          </button>
+          <h2 style={{ marginTop: 14 }}>
+            Unlock Research Library
+          </h2>
 
-          <button
-            type="button"
-            onClick={() => fileInput.current?.click()}
-            style={buttonStyle}
-          >
-            <Upload size={16} />
-            上傳檔案
-          </button>
+          <p className="muted small">
+            Enter your administrator password to access
+            your private cloud files.
+          </p>
 
-          <input
-            ref={fileInput}
-            type="file"
-            multiple
-            hidden
-            onChange={e => {
-              uploadFiles(e.target.files);
-              e.target.value = '';
-            }}
-          />
-        </div>
-      </div>
-
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1fr)',
-          gap: 16
-        }}
-      >
-        <div className="panel" style={{ padding: 16 }}>
-          <div
+          <form
+            onSubmit={unlock}
             style={{
-              display: 'flex',
-              gap: 8,
-              alignItems: 'center',
+              display: 'grid',
+              gap: 12,
+              marginTop: 20
+            }}
+          >
+            <input
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder="Administrator password"
+              autoComplete="off"
+              required
+              style={{
+                width: '100%',
+                padding: 12,
+                borderRadius: 9,
+                border: '1px solid var(--border, #8885)',
+                background: 'transparent',
+                color: 'inherit'
+              }}
+            />
+
+            <button
+              type="submit"
+              disabled={busy}
+              style={{
+                ...buttonStyle,
+                justifyContent: 'center',
+                padding: 12
+              }}
+            >
+              {busy ? 'Connecting...' : 'Unlock Library'}
+            </button>
+          </form>
+
+          {error && (
+            <p style={{ color: '#dc5252', marginTop: 12 }}>
+              {error}
+            </p>
+          )}
+        </div>
+      ) : (
+        <>
+          <div
+            className="panel"
+            style={{
+              padding: 16,
               marginBottom: 16,
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: 12,
               flexWrap: 'wrap'
             }}
           >
-            <button
-              type="button"
-              style={buttonStyle}
-              onClick={() => {
-                setCurrentFolder(null);
-                setSearch('');
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10
               }}
             >
-              <Home size={16} />
-              根目錄
-            </button>
+              <Folder size={21} />
+              <strong>My Research Files</strong>
+            </div>
 
-            {currentFolder && (
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 8
+              }}
+            >
+              <button
+                type="button"
+                onClick={createFolder}
+                disabled={busy}
+                style={buttonStyle}
+              >
+                <FolderPlus size={16} />
+                New Folder
+              </button>
+
+              <button
+                type="button"
+                onClick={() => inputRef.current?.click()}
+                disabled={busy}
+                style={buttonStyle}
+              >
+                <Upload size={16} />
+                Upload Files
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void load(folder)}
+                disabled={busy}
+                title="Refresh"
+                style={iconButton}
+              >
+                <RefreshCw size={17} />
+              </button>
+
+              <button
+                type="button"
+                onClick={logout}
+                title="Lock Library"
+                style={iconButton}
+              >
+                <LogOut size={17} />
+              </button>
+
+              <input
+                ref={inputRef}
+                type="file"
+                multiple
+                hidden
+                onChange={e => {
+                  void uploadFiles(e.target.files);
+                  e.target.value = '';
+                }}
+              />
+            </div>
+          </div>
+
+          <div className="panel" style={{ padding: 16 }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                flexWrap: 'wrap',
+                marginBottom: 16
+              }}
+            >
               <button
                 type="button"
                 style={buttonStyle}
                 onClick={() => {
-                  setCurrentFolder(folder?.parentId ?? null);
                   setSearch('');
+                  setFolder('');
                 }}
               >
-                <ArrowLeft size={16} />
-                返回上層
+                <Home size={16} />
+                Home
               </button>
-            )}
 
-            <strong style={{ marginLeft: 4 }}>
-              {folder ? folder.name : '所有研究資料'}
-            </strong>
-          </div>
+              {folder && (
+                <button
+                  type="button"
+                  style={buttonStyle}
+                  onClick={() => {
+                    const parts = folder.split('/');
+                    parts.pop();
+                    setSearch('');
+                    setFolder(parts.join('/'));
+                  }}
+                >
+                  <ArrowLeft size={16} />
+                  Back
+                </button>
+              )}
 
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              padding: '10px 12px',
-              border: '1px solid var(--border, #4444)',
-              borderRadius: 10,
-              marginBottom: 16
-            }}
-          >
-            <Search size={18} />
-            <input
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="搜尋資料夾或檔案..."
-              style={{
-                border: 'none',
-                outline: 'none',
-                background: 'transparent',
-                color: 'inherit',
-                width: '100%',
-                fontSize: 14
-              }}
-            />
-          </div>
+              <span className="muted small">
+                / {folder || 'All Research Files'}
+              </span>
+            </div>
 
-          {visible.length === 0 ? (
             <div
               style={{
-                padding: '56px 12px',
-                textAlign: 'center'
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '10px 12px',
+                border: '1px solid var(--border, #8885)',
+                borderRadius: 9,
+                marginBottom: 16
               }}
             >
-              <FolderOpen size={38} style={{ opacity: 0.5 }} />
-              <p style={{ marginTop: 12 }}>
-                {search ? '沒有符合的搜尋結果' : '這個資料夾目前是空的'}
-              </p>
-              <p className="muted small">
-                可以新增資料夾或上傳研究檔案。
-              </p>
+              <Search size={18} />
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search files and folders..."
+                style={{
+                  border: 'none',
+                  outline: 'none',
+                  background: 'transparent',
+                  color: 'inherit',
+                  width: '100%'
+                }}
+              />
             </div>
-          ) : (
+
+            {error && (
+              <p style={{ color: '#dc5252', marginBottom: 12 }}>
+                {error}
+              </p>
+            )}
+
+            {message && (
+              <p style={{ marginBottom: 12 }}>
+                {message}
+              </p>
+            )}
+
+            {busy && (
+              <p className="muted small">
+                Loading...
+              </p>
+            )}
+
+            {!busy && visible.length === 0 && (
+              <div
+                style={{
+                  padding: '50px 12px',
+                  textAlign: 'center'
+                }}
+              >
+                <Folder size={36} style={{ opacity: 0.5 }} />
+                <p>
+                  {search
+                    ? 'No matching results'
+                    : 'This folder is empty'}
+                </p>
+                <p className="muted small">
+                  Create a folder or upload your research files.
+                </p>
+              </div>
+            )}
+
             <div style={{ display: 'grid', gap: 8 }}>
-              {[...visible]
-                .sort((a, b) =>
-                  Number(b.type === 'folder') -
-                  Number(a.type === 'folder') ||
-                  a.name.localeCompare(b.name)
-                )
-                .map(item => (
+              {visible.map(item => {
+                const isFolder = item.id == null;
+
+                return (
                   <div
-                    key={item.id}
+                    key={item.name}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
+                      flexWrap: 'wrap',
                       gap: 12,
                       padding: 12,
-                      border: '1px solid var(--border, #4444)',
-                      borderRadius: 10,
-                      flexWrap: 'wrap'
+                      border: '1px solid var(--border, #8885)',
+                      borderRadius: 10
                     }}
                   >
-                    {item.type === 'folder'
+                    {isFolder
                       ? <Folder size={22} />
                       : <FileText size={22} />
                     }
 
                     <button
                       type="button"
-                      onClick={() => openItem(item)}
+                      onClick={() => {
+                        if (isFolder) {
+                          setSearch('');
+                          setFolder(joinPath(folder, item.name));
+                        } else {
+                          void downloadFile(item);
+                        }
+                      }}
                       style={{
                         border: 'none',
                         background: 'transparent',
                         color: 'inherit',
-                        cursor: 'pointer',
                         textAlign: 'left',
+                        cursor: 'pointer',
                         flex: '1 1 180px',
                         minWidth: 0,
                         overflowWrap: 'anywhere'
@@ -373,87 +620,68 @@ export default function Research() {
                     >
                       <strong>{item.name}</strong>
                       <div className="muted small">
-                        {item.type === 'folder'
-                          ? '資料夾'
-                          : `${((item.file?.size ?? 0) / 1024).toFixed(1)} KB`
+                        {isFolder
+                          ? 'Folder'
+                          : `${(
+                              (item.metadata?.size ?? 0) / 1024
+                            ).toFixed(1)} KB`
                         }
                       </div>
                     </button>
 
-                    <div
-                      style={{
-                        display: 'flex',
-                        gap: 6,
-                        flexWrap: 'wrap'
-                      }}
-                    >
-                      {item.type === 'file' && (
+                    {!isFolder && (
+                      <div
+                        style={{
+                          display: 'flex',
+                          gap: 6
+                        }}
+                      >
                         <button
                           type="button"
-                          title="下載"
+                          title="Download"
+                          disabled={busy}
                           style={iconButton}
-                          onClick={() => downloadItem(item)}
+                          onClick={() => void downloadFile(item)}
                         >
                           <Download size={17} />
                         </button>
-                      )}
 
-                      <button
-                        type="button"
-                        title="重新命名"
-                        style={iconButton}
-                        onClick={() => renameItem(item)}
-                      >
-                        <Pencil size={17} />
-                      </button>
+                        <button
+                          type="button"
+                          title="Rename"
+                          disabled={busy}
+                          style={iconButton}
+                          onClick={() => renameFile(item)}
+                        >
+                          <Pencil size={17} />
+                        </button>
 
-                      <button
-                        type="button"
-                        title="移動"
-                        style={iconButton}
-                        onClick={() => moveItem(item)}
-                      >
-                        <MoveRight size={17} />
-                      </button>
-
-                      <button
-                        type="button"
-                        title="刪除"
-                        style={iconButton}
-                        onClick={() => deleteItem(item)}
-                      >
-                        <Trash2 size={17} />
-                      </button>
-                    </div>
+                        <button
+                          type="button"
+                          title="Delete"
+                          disabled={busy}
+                          style={iconButton}
+                          onClick={() => deleteFile(item)}
+                        >
+                          <Trash2 size={17} />
+                        </button>
+                      </div>
+                    )}
                   </div>
-                ))}
+                );
+              })}
             </div>
-          )}
-        </div>
-      </div>
+          </div>
 
-      <p className="muted small" style={{ marginTop: 16 }}>
-        目前為前端功能測試版，檔案尚未上傳至 Supabase。
-        重新整理頁面後，測試資料會消失。
-      </p>
+          <p
+            className="muted small"
+            style={{ marginTop: 16 }}
+          >
+            Files are stored in private Supabase Storage.
+            Maximum upload size: 25 MB per file.
+          </p>
+        </>
+      )}
     </>
   );
 }
-
-const buttonStyle = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 7,
-  padding: '9px 12px',
-  border: '1px solid var(--border, #4444)',
-  borderRadius: 9,
-  background: 'transparent',
-  color: 'inherit',
-  cursor: 'pointer',
-  fontSize: 13
-};
-
-const iconButton = {
-  ...buttonStyle,
-  padding: 8
-};
