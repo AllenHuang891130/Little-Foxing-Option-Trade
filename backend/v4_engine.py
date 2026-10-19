@@ -311,37 +311,38 @@ def build_day(ds):
     return o
 
 
+
 def load_day(ds, force=False):
+    import time
+
     ds = pd.Timestamp(ds).strftime('%Y%m%d')
     path = ROOT / f'TXO_MTX_{ds}.csv'
 
-    # 1. Try restoring the cached file from Supabase.
-    
+    total_start = time.perf_counter()
+
+    # 1. Check local cache or restore from Supabase.
     if not force:
         if path.exists():
-            logging.warning(
-                "[CACHE] LOCAL HIT: %s", path.name
-            )
+            logging.warning("[CACHE] LOCAL HIT: %s", path.name)
         else:
-            logging.warning(
-                "[CACHE] Checking Supabase: %s", path.name
-            )
+            logging.warning("[CACHE] Checking Supabase: %s", path.name)
 
+            t0 = time.perf_counter()
             restored = restore_cloud_cache(path, force=False)
 
+            logging.warning(
+                "[PERF] Supabase restore: %.2f sec",
+                time.perf_counter() - t0
+            )
+
             if restored:
-                logging.warning(
-                    "[CACHE] SUPABASE HIT: %s", path.name
-                )
+                logging.warning("[CACHE] SUPABASE HIT: %s", path.name)
             else:
-                logging.warning(
-                    "[CACHE] SUPABASE MISS: %s", path.name
-                )
+                logging.warning("[CACHE] SUPABASE MISS: %s", path.name)
 
-
-    # 2. Reuse local cache and synchronize it to Supabase.
+    # 2. Read existing cache.
     if path.exists() and not force:
-        save_cloud_cache(path)
+        t0 = time.perf_counter()
 
         d = pd.read_csv(path, dtype={'expiry': str})
 
@@ -359,29 +360,54 @@ def load_day(ds, force=False):
         if 'OTM' in d:
             d['OTM'] = d['OTM'].astype(str).str.lower().eq('true')
 
-        needed = {
-            'expiry', 'strike', 'cp', 'oi', 'volume',
-            'F', 'moneyness', 'price', 'date'
-        }
+        logging.warning(
+            "[PERF] CSV read and parse: %.2f sec | rows=%d",
+            time.perf_counter() - t0,
+            len(d)
+        )
 
-        if not needed.issubset(d.columns):
-            raise ValueError(
-                f'Cached file {path} missing: {needed - set(d.columns)}'
-            )
-
-        # Preserve the original V4 IV recalculation.
+        # 3. Preserve the original Black-76 IV recalculation.
+        t0 = time.perf_counter()
         d = recalculate_iv(d)
+
+        logging.warning(
+            "[PERF] IV recalculation: %.2f sec",
+            time.perf_counter() - t0
+        )
+
+        logging.warning(
+            "[PERF] Total load_day: %.2f sec",
+            time.perf_counter() - total_start
+        )
+
         return d
 
-    # 3. No usable cache: download and process TAIFEX data.
+    # 4. Download and process when cache is unavailable.
+    t0 = time.perf_counter()
     d = build_day(ds)
 
-    # 4. Save locally, then upload to Supabase.
+    logging.warning(
+        "[PERF] TAIFEX download and processing: %.2f sec",
+        time.perf_counter() - t0
+    )
+
+    # 5. Save locally and persist to Supabase.
+    t0 = time.perf_counter()
     d.to_csv(path, index=False, encoding='utf-8-sig')
     save_cloud_cache(path)
 
-    print('Saved', path)
+    logging.warning(
+        "[PERF] CSV save and cloud upload: %.2f sec",
+        time.perf_counter() - t0
+    )
+
+    logging.warning(
+        "[PERF] Total load_day: %.2f sec",
+        time.perf_counter() - total_start
+    )
+
     return d
+
 
 print('Market data functions loaded.')
 
