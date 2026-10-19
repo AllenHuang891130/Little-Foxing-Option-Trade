@@ -638,47 +638,206 @@ def normalize_session_fut(raw,ds,session):
     if f.empty:raise ValueError(f'No valid MTX {session} prices tagged {ds}')
     return f[['expiry','F']].reset_index(drop=True)
 
-def load_market_session(ds,session='day',force=False):
-    ds=pd.Timestamp(ds).strftime('%Y%m%d')
-    if session not in ('day','night'):raise ValueError('session must be day or night')
-    path=ROOT/f'TXO_MTX_{ds}_{session.upper()}.csv'
-    restore_cloud_cache(path, force=force)
-    
+
+def load_market_session(ds, session='day', force=False):
+    import time
+
+    ds = pd.Timestamp(ds).strftime('%Y%m%d')
+
+    if session not in ('day', 'night'):
+        raise ValueError('session must be day or night')
+
+    path = ROOT / f'TXO_MTX_{ds}_{session.upper()}.csv'
+    total_start = time.perf_counter()
+
+    # =====================================================
+    # 1. Local / Supabase cache
+    # =====================================================
+    if not force:
+        if path.exists():
+            logging.warning("[CACHE] LOCAL HIT: %s", path.name)
+        else:
+            logging.warning("[CACHE] Checking Supabase: %s", path.name)
+
+            t0 = time.perf_counter()
+            restored = restore_cloud_cache(path, force=False)
+
+            logging.warning(
+                "[PERF] Supabase restore: %.2f sec",
+                time.perf_counter() - t0
+            )
+
+            if restored:
+                logging.warning("[CACHE] SUPABASE HIT: %s", path.name)
+            else:
+                logging.warning("[CACHE] SUPABASE MISS: %s", path.name)
+
+    # =====================================================
+    # 2. Read cached CSV
+    # =====================================================
     if path.exists() and not force:
-        # Sync existing Render cache to Supabase.
-        # This also handles CSV files created before cloud caching was added.
-        save_cloud_cache(path)
+        t0 = time.perf_counter()
 
         d = pd.read_csv(path, dtype={'expiry': str})
+
         for col in ['date', 'expiry_date', 'official_expiry_date']:
             if col in d:
                 d[col] = pd.to_datetime(d[col], errors='coerce')
 
-        return recalculate_iv(d)
+        for col in [
+            'strike', 'oi', 'volume', 'IV', 'F',
+            'DTE', 'moneyness', 'bid', 'ask',
+            'price', 'T'
+        ]:
+            if col in d:
+                d[col] = pd.to_numeric(d[col], errors='coerce')
 
-    # Historical CSV includes both 一般 and 盤後 rows for a trading date.
-    ro,rf=historical_csv('opt',ds),historical_csv('fut',ds)
-    o=normalize_session_opt(ro,ds,session)
-    f=normalize_session_fut(rf,ds,session)
-    fm=f.set_index('expiry')['F'].to_dict()
-    monthly={str(k)[:6]:v for k,v in fm.items() if re.fullmatch(r'\d{6}',str(k))}
-    o['F']=o['expiry'].map(fm)
-    o['forward_source']=np.where(o['F'].notna(),'Exact MTX','Monthly MTX proxy')
-    o['F']=o['F'].fillna(o['expiry'].str[:6].map(monthly))
-    o['moneyness']=o['strike']/o['F']-1
-    if session=='night':
-        # Use actual traded closing price; fall back to valid bid/ask midpoint only.
-        mid=(o['bid']+o['ask'])/2
-        o['price']=o['last'].where(o['last']>0,mid.where((o['bid']>0)&(o['ask']>0)&(o['ask']>=o['bid'])))
-        # Official night OI may not be comparable to day OI; intentionally mask.
-        o['oi']=np.nan
-    else:o['price']=o['settle'].where(o['settle']>0,o['last'])
-    o=recalculate_iv(o)
-    o['OTM']=np.where(o.cp.eq('Call'),o.strike>=o.F,o.strike<=o.F)
-    o.to_csv(path,index=False,encoding='utf-8-sig')
+        if 'OTM' in d:
+            d['OTM'] = (
+                d['OTM'].astype(str).str.lower().eq('true')
+            )
+
+        logging.warning(
+            "[PERF] CSV read and parse: %.2f sec | rows=%d",
+            time.perf_counter() - t0,
+            len(d)
+        )
+
+        # Reuse IV already calculated and saved in CSV.
+        t0 = time.perf_counter()
+
+        if 'IV' not in d.columns or d['IV'].notna().sum() == 0:
+            logging.warning("[IV] Missing cached IV; recalculating")
+            d = recalculate_iv(d)
+        else:
+            logging.warning(
+                "[IV] Reusing cached IV: %d / %d valid",
+                d['IV'].notna().sum(),
+                len(d)
+            )
+
+        logging.warning(
+            "[PERF] IV processing: %.2f sec",
+            time.perf_counter() - t0
+        )
+
+        logging.warning(
+            "[PERF] Total load_market_session (%s): %.2f sec",
+            session,
+            time.perf_counter() - total_start
+        )
+
+        return d
+
+    # =====================================================
+    # 3. Download TAIFEX data if cache is unavailable
+    # =====================================================
+    logging.warning(
+        "[CACHE] Building fresh session data: %s",
+        path.name
+    )
+
+    t0 = time.perf_counter()
+
+    # Historical CSV includes both 一般 and 盤後 rows.
+    ro, rf = historical_csv('opt', ds), historical_csv('fut', ds)
+
+    o = normalize_session_opt(ro, ds, session)
+    f = normalize_session_fut(rf, ds, session)
+
+    fm = f.set_index('expiry')['F'].to_dict()
+
+    monthly = {
+        str(k)[:6]: v
+        for k, v in fm.items()
+        if re.fullmatch(r'\d{6}', str(k))
+    }
+
+    o['F'] = o['expiry'].map(fm)
+
+    o['forward_source'] = np.where(
+        o['F'].notna(),
+        'Exact MTX',
+        'Monthly MTX proxy'
+    )
+
+    o['F'] = o['F'].fillna(
+        o['expiry'].str[:6].map(monthly)
+    )
+
+    o['moneyness'] = o['strike'] / o['F'] - 1
+
+    # =====================================================
+    # 4. Preserve original day/night pricing rules
+    # =====================================================
+    if session == 'night':
+        mid = (o['bid'] + o['ask']) / 2
+
+        o['price'] = o['last'].where(
+            o['last'] > 0,
+            mid.where(
+                (o['bid'] > 0)
+                & (o['ask'] > 0)
+                & (o['ask'] >= o['bid'])
+            )
+        )
+
+        # Night OI is not directly comparable to day OI.
+        o['oi'] = np.nan
+
+    else:
+        o['price'] = o['settle'].where(
+            o['settle'] > 0,
+            o['last']
+        )
+
+    # =====================================================
+    # 5. Calculate IV for newly downloaded data
+    # =====================================================
+    o = recalculate_iv(o)
+
+    o['OTM'] = np.where(
+        o.cp.eq('Call'),
+        o.strike >= o.F,
+        o.strike <= o.F
+    )
+
+    logging.warning(
+        "[PERF] TAIFEX processing + IV: %.2f sec",
+        time.perf_counter() - t0
+    )
+
+    # =====================================================
+    # 6. Save locally and upload to Supabase
+    # =====================================================
+    t0 = time.perf_counter()
+
+    o.to_csv(
+        path,
+        index=False,
+        encoding='utf-8-sig'
+    )
+
     save_cloud_cache(path)
-    print(f'Saved {path} | valid IV {o.IV.notna().sum():,}/{len(o):,}')
+
+    logging.warning(
+        "[PERF] CSV save + cloud upload: %.2f sec",
+        time.perf_counter() - t0
+    )
+
+    logging.warning(
+        "[PERF] Total load_market_session (%s): %.2f sec",
+        session,
+        time.perf_counter() - total_start
+    )
+
+    print(
+        f'Saved {path} | '
+        f'valid IV {o.IV.notna().sum():,}/{len(o):,}'
+    )
+
     return o
+
 
 def day_night_comparison(day,night,exp,rng=.06):
     """Match Two Days layout: OI delta, combined volumes, IV smile, normalized IV smile."""
