@@ -345,3 +345,55 @@ def research_download(path: str):
             500, "Unable to download research file"
         )
 
+@app.post("/research/folder-action")
+def research_folder_action(
+    request: ResearchFolderAction,
+    x_research_password: str | None = Header(default=None),
+):
+    verify_research_password(x_research_password)
+    try:
+        action = request.action
+        source = research.clean_path(request.source)
+        destination = research.clean_path(request.destination)
+        if action not in ("move", "delete"):
+            raise ValueError("Invalid action")
+        if not source or source in (".folder", ".emptyFolderPlaceholder"):
+            raise ValueError("Invalid source folder")
+        if not _research_exists(source):
+            raise ValueError("Source folder does not exist")
+        parent, name = source.rsplit("/", 1) if "/" in source else ("", source)
+        source_item = next((i for i in research.list_items(parent) if i.get("name") == name), None)
+        if not source_item or source_item.get("id") is not None:
+            raise ValueError("Source must be a folder")
+        if action == "move":
+            if not destination or destination == source:
+                raise ValueError("Choose a different destination folder path")
+            if destination.startswith(source + "/"):
+                raise ValueError("Cannot move a folder inside itself")
+            if _research_exists(destination):
+                raise ValueError("Destination already exists")
+            destination_parent = destination.rsplit("/", 1)[0] if "/" in destination else ""
+            if destination_parent and not _research_exists(destination_parent):
+                raise ValueError("Destination parent folder does not exist")
+        descendants = _research_tree(source)
+        paths = [item["path"] for item in descendants if not item["is_folder"]]
+        if not paths:
+            raise ValueError("Folder has no storage objects")
+        if action == "delete":
+            # Supabase delete endpoint supports batches; each object path is explicit.
+            for i in range(0, len(paths), 100):
+                research.delete_files(paths[i:i + 100])
+            return {"deleted": len(paths)}
+        # Move nested objects. Moving files can be partially completed if
+        # Supabase rejects a later operation; return a server error in that case.
+        moved = 0
+        for path in paths:
+            new_path = destination + path[len(source):]
+            research.move_file(path, new_path)
+            moved += 1
+        return {"moved": moved, "source": source, "destination": destination}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception("Research folder action failed")
+        raise HTTPException(500, "Unable to manage research folder; check Render logs")
