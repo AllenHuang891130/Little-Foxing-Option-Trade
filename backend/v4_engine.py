@@ -114,16 +114,102 @@ def normalize_fut(raw,ds):
     if f.empty:raise ValueError('No matching MTX regular-session rows for '+ds)
     return f[['expiry','F']].reset_index(drop=True)
 
-def historical_csv(kind,ds):
-    # Historical daily CSV endpoint used in earlier experiments. Fail closed on invalid output.
-    endpoint='optDataDown' if kind=='opt' else 'futDataDown'
-    s=requests.Session();s.headers.update({'User-Agent':'Mozilla/5.0'})
-    s.get(HIST+endpoint,timeout=30).raise_for_status()
-    dt=pd.Timestamp(ds).strftime('%Y/%m/%d')
-    payload={'down_type':'1','commodity_id':'TXO' if kind=='opt' else 'MTX','queryStartDate':dt,'queryEndDate':dt,'MarketCode':'0'}
-    r=s.post(HIST+endpoint,data=payload,timeout=60,headers={'Referer':HIST+endpoint});r.raise_for_status()
-    try:return read_csv_bytes(r.content)
-    except Exception as e:raise ValueError(f'Historical {kind} CSV unavailable for {ds}; use previously cached TXO_MTX file or verify TAIFEX download form. {e}')
+
+def historical_csv(kind, ds):
+    import logging
+    import time
+    from requests.exceptions import RequestException
+
+    if kind not in ("opt", "fut"):
+        raise ValueError(f"Unsupported data kind: {kind}")
+
+    ds = pd.Timestamp(ds).strftime("%Y%m%d")
+    endpoint = "optDataDown" if kind == "opt" else "futDataDown"
+    url = HIST + endpoint
+    dt = pd.Timestamp(ds).strftime("%Y/%m/%d")
+
+    payload = {
+        "down_type": "1",
+        "commodity_id": "TXO" if kind == "opt" else "MTX",
+        "queryStartDate": dt,
+        "queryEndDate": dt,
+        "MarketCode": "0",
+    }
+
+    last_error = None
+
+    for attempt in range(1, 4):
+        try:
+            with requests.Session() as s:
+                s.headers.update({
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "text/csv,text/html,*/*",
+                })
+
+                logging.info(
+                    "TAIFEX %s %s attempt %d/3: GET form",
+                    kind, ds, attempt
+                )
+
+                # Preserve the original GET -> POST session flow.
+                form = s.get(url, timeout=(10, 45))
+                form.raise_for_status()
+
+                logging.info(
+                    "TAIFEX %s %s attempt %d/3: POST CSV",
+                    kind, ds, attempt
+                )
+
+                response = s.post(
+                    url,
+                    data=payload,
+                    headers={"Referer": url},
+                    timeout=(10, 90),
+                )
+                response.raise_for_status()
+
+                raw = read_csv_bytes(response.content)
+
+                if raw.empty:
+                    raise ValueError("TAIFEX returned an empty CSV")
+
+                columns = {
+                    str(c).strip().replace(" ", "")
+                    for c in raw.columns
+                }
+
+                expected = {"交易日期", "契約"}
+
+                if not expected.issubset(columns):
+                    raise ValueError(
+                        "Unexpected TAIFEX response columns: "
+                        + str(list(raw.columns)[:12])
+                    )
+
+                logging.info(
+                    "TAIFEX %s %s downloaded: %d rows",
+                    kind, ds, len(raw)
+                )
+
+                return raw
+
+        except (RequestException, ValueError) as exc:
+            last_error = exc
+            logging.warning(
+                "TAIFEX download failed: kind=%s date=%s "
+                "attempt=%d/3 error=%s",
+                kind, ds, attempt, exc
+            )
+
+            if attempt < 3:
+                time.sleep(attempt * 2)
+
+    raise RuntimeError(
+        f"TAIFEX historical {kind} download failed "
+        f"for {ds} after 3 attempts. "
+        f"Last error: {last_error}"
+    )
+
 
 def b76(F,K,T,v,cp):
     if min(F,K,T,v)<=0:return np.nan
