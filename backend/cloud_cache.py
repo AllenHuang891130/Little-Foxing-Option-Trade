@@ -32,8 +32,19 @@ def _object_key(filename):
     return f"{PREFIX}/{name}"
 
 
+
 def _headers(key):
-    return {"apikey": key, "Authorization": f"Bearer {key}"}
+    headers = {
+        "apikey": key,
+    }
+
+    # Legacy service_role keys are JWTs and may be used as Bearer tokens.
+    # New sb_secret_ keys should not be sent as Bearer JWTs.
+    if not key.startswith("sb_secret_"):
+        headers["Authorization"] = f"Bearer {key}"
+
+    return headers
+
 
 
 
