@@ -549,11 +549,19 @@ def load_market_session(ds,session='day',force=False):
     if session not in ('day','night'):raise ValueError('session must be day or night')
     path=ROOT/f'TXO_MTX_{ds}_{session.upper()}.csv'
     restore_cloud_cache(path, force=force)
+    
     if path.exists() and not force:
-        d=pd.read_csv(path,dtype={'expiry':str})
-        for col in ['date','expiry_date','official_expiry_date']:
-            if col in d:d[col]=pd.to_datetime(d[col],errors='coerce')
+        # Sync existing Render cache to Supabase.
+        # This also handles CSV files created before cloud caching was added.
+        save_cloud_cache(path)
+
+        d = pd.read_csv(path, dtype={'expiry': str})
+        for col in ['date', 'expiry_date', 'official_expiry_date']:
+            if col in d:
+                d[col] = pd.to_datetime(d[col], errors='coerce')
+
         return recalculate_iv(d)
+
     # Historical CSV includes both 一般 and 盤後 rows for a trading date.
     ro,rf=historical_csv('opt',ds),historical_csv('fut',ds)
     o=normalize_session_opt(ro,ds,session)
