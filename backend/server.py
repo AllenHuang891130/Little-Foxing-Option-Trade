@@ -262,8 +262,8 @@ def research_create_folder(
 
         return research.upload_file(
             marker,
-            b"",
-            "application/octet-stream"
+            b"Research Library folder marker\n",
+            "text/plain"
         )
 
     except ValueError as exc:
