@@ -6,22 +6,30 @@ import os
 import threading
 from datetime import date
 from typing import Literal
-
+from urllib.parse import quote
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+import hmac
+from pathlib import PurePosixPath
 
+import research_storage as research
 import v4_engine as v4
 
 app = FastAPI(title="Quant Research Lab V4 API", version="0.3")
 # Local-network development only. Restrict origins before public deployment.
 origins = [x.strip().rstrip("/") for x in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",") if x.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_methods=["GET", "POST", "DELETE", "PATCH"],
+    allow_headers=["Content-Type", "X-Research-Password"],
+)
 plot_lock = threading.Lock()
 
 class Query(BaseModel):
@@ -139,3 +147,210 @@ def analyze(q:Query):
         finally:
             plt.show=previous_show
             plt.close('all')
+
+# ============================================================
+# RESEARCH LIBRARY API
+# ============================================================
+
+def verify_research_password(
+    x_research_password: str | None = Header(default=None)
+):
+    expected = os.environ.get("RESEARCH_ADMIN_PASSWORD", "")
+
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="Research Library is not configured"
+        )
+
+    if not x_research_password or not hmac.compare_digest(
+        x_research_password,
+        expected
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Research Library password"
+        )
+
+
+class ResearchPath(BaseModel):
+    path: str
+
+
+class ResearchMove(BaseModel):
+    source: str
+    destination: str
+
+
+class ResearchDelete(BaseModel):
+    paths: list[str]
+
+
+@app.get("/research/files")
+def research_list(
+    folder: str = "",
+    x_research_password: str | None = Header(default=None)
+):
+    verify_research_password(x_research_password)
+
+    try:
+        return {
+            "folder": folder,
+            "items": research.list_items(folder)
+        }
+    except Exception:
+        logging.exception("Research list failed")
+        raise HTTPException(
+            500,
+            "Unable to list research files"
+        )
+
+
+@app.post("/research/upload")
+async def research_upload(
+    file: UploadFile = File(...),
+    folder: str = Form(default=""),
+    x_research_password: str | None = Header(default=None)
+):
+    verify_research_password(x_research_password)
+
+    try:
+        filename = PurePosixPath(file.filename or "").name
+
+        if not filename or filename in (".", ".."):
+            raise ValueError("Invalid filename")
+
+        folder = research.clean_path(folder)
+
+        path = f"{folder}/{filename}" if folder else filename
+
+        # Read at most the configured limit plus one byte.
+        content = await file.read(research.MAX_FILE_BYTES + 1)
+
+        return research.upload_file(
+            path,
+            content,
+            file.content_type
+        )
+
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception("Research upload failed")
+        raise HTTPException(
+            500,
+            "Unable to upload research file"
+        )
+
+
+@app.post("/research/folder")
+def research_create_folder(
+    request: ResearchPath,
+    x_research_password: str | None = Header(default=None)
+):
+    verify_research_password(x_research_password)
+
+    try:
+        folder = research.clean_path(request.path)
+
+        if not folder:
+            raise ValueError("Folder path is required")
+
+        # Supabase Storage has no physical empty directories.
+        # A marker object preserves an otherwise empty folder.
+        marker = f"{folder}/.folder"
+
+        return research.upload_file(
+            marker,
+            b"",
+            "application/octet-stream"
+        )
+
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception("Research folder creation failed")
+        raise HTTPException(
+            500,
+            "Unable to create research folder"
+        )
+
+
+@app.post("/research/move")
+def research_move(
+    request: ResearchMove,
+    x_research_password: str | None = Header(default=None)
+):
+    verify_research_password(x_research_password)
+
+    try:
+        return research.move_file(
+            request.source,
+            request.destination
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception("Research move failed")
+        raise HTTPException(
+            500,
+            "Unable to move research file"
+        )
+
+
+@app.delete("/research/files")
+def research_delete(
+    request: ResearchDelete,
+    x_research_password: str | None = Header(default=None)
+):
+    verify_research_password(x_research_password)
+
+    try:
+        return research.delete_files(request.paths)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception("Research deletion failed")
+        raise HTTPException(
+            500,
+            "Unable to delete research files"
+        )
+
+
+@app.get("/research/download")
+def research_download(
+    path: str,
+    x_research_password: str | None = Header(default=None)
+):
+    verify_research_password(x_research_password)
+
+    try:
+        from fastapi.responses import Response
+
+        path = research.clean_path(path)
+
+        if not path:
+            raise ValueError("File path is required")
+
+        content = research.download_file(path)
+
+        filename = PurePosixPath(path).name
+
+        return Response(
+            content=content,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition":
+                    f"attachment; filename*=UTF-8''{quote(filename)}",
+                "Cache-Control": "no-store",
+            }
+        )
+
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception("Research download failed")
+        raise HTTPException(
+            500,
+            "Unable to download research file"
+        )
