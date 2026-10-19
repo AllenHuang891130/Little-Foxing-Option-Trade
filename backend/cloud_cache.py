@@ -33,17 +33,22 @@ def _object_key(filename):
 
 
 
+
 def _headers(key):
-    headers = {
+    key = key.strip()
+
+    if key.startswith("sb_secret_"):
+        # New Supabase secret key: use apikey only.
+        return {
+            "apikey": key,
+        }
+
+    # Legacy service_role JWT.
+    return {
         "apikey": key,
+        "Authorization": f"Bearer {key}",
     }
 
-    # Legacy service_role keys are JWTs and may be used as Bearer tokens.
-    # New sb_secret_ keys should not be sent as Bearer JWTs.
-    if not key.startswith("sb_secret_"):
-        headers["Authorization"] = f"Bearer {key}"
-
-    return headers
 
 
 
