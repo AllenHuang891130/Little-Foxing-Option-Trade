@@ -316,8 +316,28 @@ def load_day(ds, force=False):
     path = ROOT / f'TXO_MTX_{ds}.csv'
 
     # 1. Try restoring the cached file from Supabase.
+    
     if not force:
-        restore_cloud_cache(path, force=False)
+        if path.exists():
+            logging.warning(
+                "[CACHE] LOCAL HIT: %s", path.name
+            )
+        else:
+            logging.warning(
+                "[CACHE] Checking Supabase: %s", path.name
+            )
+
+            restored = restore_cloud_cache(path, force=False)
+
+            if restored:
+                logging.warning(
+                    "[CACHE] SUPABASE HIT: %s", path.name
+                )
+            else:
+                logging.warning(
+                    "[CACHE] SUPABASE MISS: %s", path.name
+                )
+
 
     # 2. Reuse local cache and synchronize it to Supabase.
     if path.exists() and not force:
