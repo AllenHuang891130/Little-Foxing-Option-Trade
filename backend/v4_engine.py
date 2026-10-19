@@ -368,7 +368,19 @@ def load_day(ds, force=False):
 
         # 3. Preserve the original Black-76 IV recalculation.
         t0 = time.perf_counter()
-        d = recalculate_iv(d)
+        
+        # Reuse previously calculated IV when available.
+        # Recalculate only if IV data is missing.
+        if 'IV' not in d.columns or d['IV'].notna().sum() == 0:
+            logging.warning("[IV] Missing cached IV; recalculating")
+            d = recalculate_iv(d)
+        else:
+            logging.warning(
+                "[IV] Reusing cached IV: %d / %d valid",
+                d['IV'].notna().sum(),
+                len(d)
+            )
+
 
         logging.warning(
             "[PERF] IV recalculation: %.2f sec",
