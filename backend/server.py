@@ -358,3 +358,31 @@ def research_download(path: str):
         )
 
 
+# ============================================================
+# RESEARCH LIBRARY - FULL TREE
+# ============================================================
+
+@app.get("/research/tree")
+def research_tree():
+    """Public read-only listing of all research files and folders."""
+    try:
+        items = research.list_all_items(max_items=3000)
+
+        return {
+            "items": items,
+            "total": len(items),
+        }
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except Exception:
+        logging.exception("Research tree listing failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to list research tree",
+        )
+
