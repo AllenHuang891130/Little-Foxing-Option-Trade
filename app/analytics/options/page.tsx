@@ -3,24 +3,19 @@ import {useState} from 'react';
 import {RefreshCcw, Play, Info} from 'lucide-react';
 
 type Mode='single'|'compare'|'cross'|'inst'|'daynight';
+const ALL='__ALL__';
 const modes:{id:Mode;label:string}[]=[
  {id:'single',label:'Single Day'}, {id:'compare',label:'Two Days'},
  {id:'cross',label:'Cross Expiry'}, {id:'inst',label:'Institutions'},
  {id:'daynight',label:'Day vs Night'}
 ];
-type Result={image:string;meta:Record<string,unknown>;note:string};
+type ExpiryChart={expiry:string;image:string;meta:Record<string,unknown>};
+type Result={image:string;images?:ExpiryChart[];meta:Record<string,unknown>;note:string};
 
-function apiBase() {
-  const configured = process.env.NEXT_PUBLIC_API_BASE_URL
-    ?.trim()
-    .replace(/\/$/, '');
-
-  if (configured) return configured;
-
-  // Local development fallback
-  return 'http://localhost:8000';
+function apiBase(){
+ const configured=process.env.NEXT_PUBLIC_API_BASE_URL?.trim().replace(/\/$/,'');
+ return configured||'http://localhost:8000';
 }
-
 export default function Options(){
  const [mode,setMode]=useState<Mode>('daynight');
  const [date1,setDate1]=useState('2026-10-16');
@@ -32,14 +27,14 @@ export default function Options(){
  const [lookback,setLookback]=useState('20');
  const [force,setForce]=useState(false);
  const [busy,setBusy]=useState(false);
- const [message,setMessage]=useState('Start the local Python API, then load available expiries.');
+ const [message,setMessage]=useState('Load available expiries to begin.');
  const [result,setResult]=useState<Result|null>(null);
  const second=mode==='compare'||mode==='daynight';
  const body=()=>({mode,date1,date2:second?date2:null,expiry,expiries:selectedExpiries,
-   range_pct:Number(atmRange),lookback:Number(lookback),force});
+  range_pct:Number(atmRange),lookback:Number(lookback),force});
  async function request(path:string){
   const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),180000);
+  const timer=setTimeout(()=>controller.abort(),300000);
   try{
    const response=await fetch(apiBase()+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body()),signal:controller.signal});
    const json=await response.json();
@@ -53,17 +48,23 @@ export default function Options(){
    const data=await request('/expiries');
    const values=data.expiries as string[];
    setExpiryOptions(values);
-   if(values.length&&!values.includes(expiry))setExpiry(values[0]);
-   setSelectedExpiries(old=>old.filter(v=>values.includes(v)).length?old.filter(v=>values.includes(v)):values.slice(0,3));
-   setMessage(`Loaded ${values.length} expiry choices from TAIFEX/cache. Select an expiry and run analysis.`);
-  }catch(e){setMessage(`Load failed: ${e instanceof Error?e.message:String(e)}. Check the Python server and data availability.`)}
+   if(values.length&&expiry!==ALL&&!values.includes(expiry))setExpiry(values[0]);
+   setSelectedExpiries(old=>{
+    const retained=old.filter(v=>values.includes(v));
+    return retained.length?retained:values.slice(0,3);
+   });
+   setMessage(`Loaded ${values.length} expiry choices. Select an expiry or All Expiries and run analysis.`);
+  }catch(e){setMessage(`Load failed: ${e instanceof Error?e.message:String(e)}. Check the API and data availability.`)}
   finally{setBusy(false)}
  }
  async function run(){
-  setBusy(true);setResult(null);setMessage('Running V4 calculations. First-time TAIFEX downloads may take a while...');
+  if(mode!=='inst'&&expiryOptions.length===0){setMessage('Load Dates / Expiries before running analysis.');return;}
+  setBusy(true);setResult(null);setMessage('Running V4 calculations. All Expiries may take longer...');
   try{
    const data=await request('/analyze') as Result;
-   setResult(data);setMessage('Analysis completed using V4 calculation functions.');
+   setResult(data);
+   const count=data.images?.length;
+   setMessage(count?`Analysis completed: ${count} expiry charts.`:'Analysis completed using V4 calculation functions.');
   }catch(e){setMessage(`Analysis failed: ${e instanceof Error?e.message:String(e)}`)}
   finally{setBusy(false)}
  }
@@ -77,7 +78,7 @@ export default function Options(){
    <div className="fields">
     <label>{mode==='inst'?'Analysis Date':'Date 1 / Day Date'}<input type="date" value={date1} onChange={e=>setDate1(e.target.value)}/></label>
     {second&&<label>{mode==='daynight'?'Night Data Label Date':'Date 2'}<input type="date" value={date2} onChange={e=>setDate2(e.target.value)}/></label>}
-    {mode!=='inst'&&(mode==='cross'?<label>Expiries (multiple)<select multiple size={4} value={selectedExpiries} onChange={e=>setSelectedExpiries(Array.from(e.target.selectedOptions).map(o=>o.value))}>{expiryOptions.map(x=><option key={x}>{x}</option>)}</select></label>:<label>Expiry<select value={expiry} onChange={e=>setExpiry(e.target.value)}>{!expiryOptions.includes(expiry)&&<option value={expiry}>{expiry}</option>}{expiryOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>)}
+    {mode!=='inst'&&(mode==='cross'?<label>Expiries (multiple)<select multiple size={4} value={selectedExpiries} onChange={e=>setSelectedExpiries(Array.from(e.target.selectedOptions).map(o=>o.value))}>{expiryOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>:<label>Expiry<select value={expiry} onChange={e=>setExpiry(e.target.value)}>{<option value={ALL}>All Expiries</option>}{expiry!==ALL&&!expiryOptions.includes(expiry)&&<option value={expiry}>{expiry}</option>}{expiryOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>)}
     {mode==='inst'?<label>Lookback (Calendar Days)<input type="number" min="1" max="90" value={lookback} onChange={e=>setLookback(e.target.value)}/></label>:<label>Moneyness Range (%)<input type="number" min="1" max="30" value={atmRange} onChange={e=>setAtmRange(e.target.value)}/></label>}
    </div>
    <label className="cache-toggle"><input type="checkbox" checked={force} onChange={e=>setForce(e.target.checked)}/> Force refresh cached data</label>
@@ -85,9 +86,11 @@ export default function Options(){
    <div className="notice" role="status"><Info size={15} style={{verticalAlign:'middle',marginRight:7}}/>{message}</div>
   </div>
   <div className="panel"><div className="sectiontitle"><h2>{modes.find(m=>m.id===mode)?.label} Analysis</h2><span>{result?'V4 results':'Waiting for analysis'}</span></div>
-   {result?<><img className="analysis-image" src={result.image} alt="TAIFEX V4 option analytics charts"/>
-    {Object.keys(result.meta).length>0&&<pre className="result-meta">{JSON.stringify(result.meta,null,2)}</pre>}
-    <p className="analysis-note">{result.note}</p></>:<div className="plot-empty">No results yet. Start the local Python API and click Run Analysis.</div>}
+   {result?<>
+    {result.images?.length?result.images.map(chart=><section key={chart.expiry} style={{marginBottom:32}}><h3 style={{marginBottom:12}}>Expiry: {chart.expiry}</h3><img className="analysis-image" src={chart.image} alt={`TAIFEX V4 analytics for ${chart.expiry}`}/>{Object.keys(chart.meta||{}).length>0&&<pre className="result-meta">{JSON.stringify(chart.meta,null,2)}</pre>}</section>):<img className="analysis-image" src={result.image} alt="TAIFEX V4 option analytics charts"/>}
+    {Object.keys(result.meta||{}).length>0&&<pre className="result-meta">{JSON.stringify(result.meta,null,2)}</pre>}
+    <p className="analysis-note">{result.note}</p>
+   </>:<div className="plot-empty">No results yet. Load available expiries and click Run Analysis.</div>}
    <p className="analysis-note">Day vs Night dates are independent. Night Volume / Day OI are shown in the top row. Institutional charts use the original V4 daily data logic.</p>
   </div>
  </>;
