@@ -106,47 +106,105 @@ def expiries(q:Query):
         raise HTTPException(422,str(e)) from e
 
 @app.post('/analyze')
-def analyze(q:Query):
+def analyze(q: Query):
     with plot_lock:
         plt.close('all')
-        previous_show=plt.show
-        plt.show=lambda *args,**kwargs: None
+        previous_show = plt.show
+        plt.show = lambda *args, **kwargs: None
         try:
-            rng=q.range_pct/100
-            meta={}
-            if q.mode=='inst':
-                df, errors=v4.institution_series(q.date1,calendar_days=q.lookback)
+            rng = q.range_pct / 100
+            meta = {}
+            all_mode = q.expiry == '__ALL__' and q.mode in ('single', 'compare', 'daynight')
+
+            if q.mode == 'inst':
+                df, errors = v4.institution_series(q.date1, calendar_days=q.lookback)
                 v4.institutional_charts(df)
-                meta={'source_errors':errors,'rows':len(df)}
-            elif q.mode=='daynight':
-                if q.date2 is None: raise ValueError('Night Data Label Date is required')
-                a=v4.load_market_session(fmt(q.date1),'day',q.force)
-                b=v4.load_market_session(fmt(q.date2),'night',q.force)
-                meta=daynight_updated(a,b,q.expiry,rng)
-            elif q.mode=='compare':
-                if q.date2 is None: raise ValueError('Date 2 is required')
-                a=v4.load_day(fmt(q.date1),q.force); b=v4.load_day(fmt(q.date2),q.force)
-                v4.two_days(a,b,q.expiry,rng)
-            elif q.mode=='cross':
-                a=v4.load_day(fmt(q.date1),q.force)
-                chosen=q.expiries or [q.expiry]
-                v4.cross_expiry(a,chosen,rng)
+                meta = {'source_errors': errors, 'rows': len(df)}
+            elif q.mode == 'daynight':
+                if q.date2 is None:
+                    raise ValueError('Night Data Label Date is required')
+                a = v4.load_market_session(fmt(q.date1), 'day', q.force)
+                b = v4.load_market_session(fmt(q.date2), 'night', q.force)
+            elif q.mode == 'compare':
+                if q.date2 is None:
+                    raise ValueError('Date 2 is required')
+                a = v4.load_day(fmt(q.date1), q.force)
+                b = v4.load_day(fmt(q.date2), q.force)
             else:
-                a=v4.load_day(fmt(q.date1),q.force)
-                v4.single_day(a,q.expiry,rng)
-            nums=plt.get_fignums()
-            if not nums: raise ValueError('Analysis returned no charts')
-            fig=plt.figure(nums[-1]); out=io.BytesIO()
-            fig.savefig(out,format='png',dpi=130,bbox_inches='tight',facecolor='white')
-            img=base64.b64encode(out.getvalue()).decode('ascii')
-            return {'image':'data:image/png;base64,'+img,'meta':meta,'mode':q.mode,
-                    'note':'V4 Black-76 / TAIFEX. Charts are rendered from retrieved data, not demo values.'}
+                a = v4.load_day(fmt(q.date1), q.force)
+
+            if all_mode:
+                # Only contracts present in BOTH datasets are compared.
+                common = set(a.expiry.dropna().astype(str))
+                if q.mode != 'single':
+                    common &= set(b.expiry.dropna().astype(str))
+                expiries = sorted(common)
+                if not expiries:
+                    raise ValueError('No common expiries for the selected dates/sessions')
+                results = []
+                errors = []
+                for exp in expiries:
+                    plt.close('all')
+                    try:
+                        if q.mode == 'single':
+                            v4.single_day(a, exp, rng)
+                            exp_meta = {}
+                        elif q.mode == 'compare':
+                            v4.two_days(a, b, exp, rng)
+                            exp_meta = {}
+                        else:
+                            exp_meta = daynight_updated(a, b, exp, rng)
+                        nums = plt.get_fignums()
+                        if not nums:
+                            raise ValueError('No chart generated')
+                        fig = plt.figure(nums[-1])
+                        out = io.BytesIO()
+                        fig.savefig(out, format='png', dpi=130, bbox_inches='tight', facecolor='white')
+                        image = 'data:image/png;base64,' + base64.b64encode(out.getvalue()).decode('ascii')
+                        results.append({'expiry': exp, 'image': image, 'meta': exp_meta})
+                    except Exception as exc:
+                        logging.exception('Expiry %s failed', exp)
+                        errors.append({'expiry': exp, 'error': str(exc)})
+                if not results:
+                    raise ValueError('All expiry charts failed: ' + str(errors))
+                return {
+                    'images': results,
+                    'image': results[0]['image'],
+                    'meta': {'requested': len(expiries), 'completed': len(results), 'failed': errors},
+                    'mode': q.mode,
+                    'note': 'Each expiry is calculated separately using V4 / TAIFEX data.'
+                }
+
+            if q.mode == 'daynight':
+                meta = daynight_updated(a, b, q.expiry, rng)
+            elif q.mode == 'compare':
+                v4.two_days(a, b, q.expiry, rng)
+            elif q.mode == 'cross':
+                chosen = q.expiries or [q.expiry]
+                v4.cross_expiry(a, chosen, rng)
+            elif q.mode == 'single':
+                v4.single_day(a, q.expiry, rng)
+            # inst already generated its chart
+
+            nums = plt.get_fignums()
+            if not nums:
+                raise ValueError('Analysis returned no charts')
+            fig = plt.figure(nums[-1])
+            out = io.BytesIO()
+            fig.savefig(out, format='png', dpi=130, bbox_inches='tight', facecolor='white')
+            img = base64.b64encode(out.getvalue()).decode('ascii')
+            return {
+                'image': 'data:image/png;base64,' + img,
+                'meta': meta, 'mode': q.mode,
+                'note': 'V4 Black-76 / TAIFEX. Charts are rendered from retrieved data, not demo values.'
+            }
         except Exception as e:
             logging.exception('Analysis failed')
-            raise HTTPException(422,str(e)) from e
+            raise HTTPException(422, str(e)) from e
         finally:
-            plt.show=previous_show
+            plt.show = previous_show
             plt.close('all')
+
 
 # ============================================================
 # RESEARCH LIBRARY API
