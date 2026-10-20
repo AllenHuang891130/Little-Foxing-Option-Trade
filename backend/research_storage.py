@@ -273,3 +273,121 @@ def list_all_items(max_items=3000):
                 pending.append(path)
 
     return results
+
+# ============================================================
+# RESEARCH LIBRARY - FOLDER MANAGEMENT
+# ============================================================
+
+def folder_contents(folder):
+    """Collect every stored object inside a folder."""
+    folder = clean_path(folder)
+
+    if not folder:
+        raise ValueError("Root folder cannot be managed")
+
+    pending = [folder]
+    visited = set()
+    paths = []
+
+    while pending:
+        current = pending.pop()
+
+        if current in visited:
+            continue
+
+        visited.add(current)
+        items = list_items(current)
+
+        if len(items) >= 1000:
+            raise ValueError(
+                "Folder contains too many items; "
+                "pagination is required"
+            )
+
+        for item in items:
+            name = item.get("name")
+
+            if not name:
+                continue
+
+            path = f"{current}/{name}"
+
+            if item.get("id") is None:
+                pending.append(path)
+            else:
+                paths.append(path)
+
+    return paths
+
+
+def move_folder(source, destination):
+    """Move or rename a folder and its contents."""
+    source = clean_path(source)
+    destination = clean_path(destination)
+
+    if not source or not destination:
+        raise ValueError(
+            "Source and destination folders are required"
+        )
+
+    if destination.startswith(source + "/"):
+        raise ValueError(
+            "Cannot move a folder into itself"
+        )
+
+    if source == destination:
+        return {
+            "source": source,
+            "destination": destination,
+            "moved": 0,
+        }
+
+    paths = folder_contents(source)
+
+    if not paths:
+        raise ValueError("Folder is empty or does not exist")
+
+    moved = []
+
+    for old_path in paths:
+        relative = old_path[len(source) + 1:]
+        new_path = f"{destination}/{relative}"
+
+        move_file(old_path, new_path)
+        moved.append({
+            "source": old_path,
+            "destination": new_path,
+        })
+
+    return {
+        "source": source,
+        "destination": destination,
+        "moved": len(moved),
+        "files": moved,
+    }
+
+
+def delete_folder(folder):
+    """Delete a folder and every object inside it."""
+    folder = clean_path(folder)
+
+    if not folder:
+        raise ValueError("Root folder cannot be deleted")
+
+    paths = folder_contents(folder)
+
+    if not paths:
+        raise ValueError("Folder is empty or does not exist")
+
+    # Delete in batches to avoid oversized requests.
+    deleted = 0
+
+    for start in range(0, len(paths), 100):
+        batch = paths[start:start + 100]
+        delete_files(batch)
+        deleted += len(batch)
+
+    return {
+        "folder": folder,
+        "deleted": deleted,
+    }
