@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import hmac
 from pathlib import PurePosixPath
-
+import strategy_storage as strategy
 import research_storage as research
 import v4_engine as v4
 
@@ -445,3 +445,197 @@ def research_folder_delete(
             status_code=500,
             detail="Unable to delete research folder",
         )
+
+# ============================================================
+# STRATEGY LAB API - independent strategy-lab bucket
+# Paste at the END of backend/server.py.
+# Also add near the existing imports:
+# import strategy_storage as strategy
+# ============================================================
+
+
+def _strategy_existing_paths():
+    return {item['path'] for item in strategy.list_all_items(max_items=3000)}
+
+
+def _strategy_ensure_destination_free(source: str, destination: str):
+    source = strategy.clean_path(source)
+    destination = strategy.clean_path(destination)
+    if source != destination and destination in _strategy_existing_paths():
+        raise ValueError('Destination already exists')
+
+
+@app.get('/strategy/files')
+def strategy_list(folder: str = ''):
+    try:
+        return {'folder': folder, 'items': strategy.list_items(folder)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception('Strategy list failed')
+        raise HTTPException(500, 'Unable to list strategy files')
+
+
+@app.get('/strategy/tree')
+def strategy_tree():
+    try:
+        items = strategy.list_all_items(max_items=3000)
+        return {'items': items, 'total': len(items)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception('Strategy tree failed')
+        raise HTTPException(500, 'Unable to list strategy tree')
+
+
+@app.get('/strategy/download')
+def strategy_download(path: str):
+    try:
+        from fastapi.responses import Response
+        path = strategy.clean_path(path)
+        if not path:
+            raise ValueError('File path is required')
+        content = strategy.download_file(path)
+        filename = PurePosixPath(path).name
+        is_pdf = filename.lower().endswith('.pdf')
+        return Response(
+            content=content,
+            media_type='application/pdf' if is_pdf else 'application/octet-stream',
+            headers={
+                'Content-Disposition': (
+                    f"inline; filename*=UTF-8''{quote(filename)}" if is_pdf
+                    else f"attachment; filename*=UTF-8''{quote(filename)}"
+                ),
+                'Cache-Control': 'no-store',
+                'X-Content-Type-Options': 'nosniff',
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception('Strategy download failed')
+        raise HTTPException(500, 'Unable to download strategy file')
+
+
+@app.post('/strategy/upload')
+async def strategy_upload(
+    file: UploadFile = File(...),
+    folder: str = Form(default=''),
+    x_research_password: str | None = Header(default=None),
+):
+    verify_research_password(x_research_password)
+    try:
+        filename = PurePosixPath(file.filename or '').name
+        if not filename or filename in ('.', '..'):
+            raise ValueError('Invalid filename')
+        folder = strategy.clean_path(folder)
+        path = f'{folder}/{filename}' if folder else filename
+        if path in _strategy_existing_paths():
+            raise ValueError('File already exists')
+        content = await file.read(strategy.MAX_FILE_BYTES + 1)
+        return strategy.upload_file(path, content, file.content_type)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception('Strategy upload failed')
+        raise HTTPException(500, 'Unable to upload strategy file')
+
+
+@app.post('/strategy/folder')
+def strategy_create_folder(
+    request: ResearchPath,
+    x_research_password: str | None = Header(default=None),
+):
+    verify_research_password(x_research_password)
+    try:
+        folder = strategy.clean_path(request.path)
+        if not folder:
+            raise ValueError('Folder path is required')
+        if folder in _strategy_existing_paths():
+            raise ValueError('Folder already exists')
+        return strategy.upload_file(
+            f'{folder}/.folder', b'Strategy Lab folder marker\n', 'text/plain'
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception('Strategy folder creation failed')
+        raise HTTPException(500, 'Unable to create strategy folder')
+
+
+@app.post('/strategy/move')
+def strategy_move(
+    request: ResearchMove,
+    x_research_password: str | None = Header(default=None),
+):
+    verify_research_password(x_research_password)
+    try:
+        _strategy_ensure_destination_free(request.source, request.destination)
+        return strategy.move_file(request.source, request.destination)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception('Strategy move failed')
+        raise HTTPException(500, 'Unable to move strategy file')
+
+
+@app.delete('/strategy/files')
+def strategy_delete(
+    request: ResearchDelete,
+    x_research_password: str | None = Header(default=None),
+):
+    verify_research_password(x_research_password)
+    try:
+        return strategy.delete_files(request.paths)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception('Strategy deletion failed')
+        raise HTTPException(500, 'Unable to delete strategy files')
+
+
+@app.post('/strategy/folder/move')
+def strategy_folder_move(
+    request: ResearchFolderMove,
+    x_research_password: str | None = Header(default=None),
+):
+    verify_research_password(x_research_password)
+    try:
+        source = strategy.clean_path(request.source)
+        destination = strategy.clean_path(request.destination)
+        if not source or not destination:
+            raise ValueError('Source and destination are required')
+        if destination.startswith(source + '/'):
+            raise ValueError('Cannot move a folder into itself')
+        existing = _strategy_existing_paths()
+        if source not in existing:
+            raise ValueError('Source folder does not exist')
+        if source != destination:
+            targets = {
+                destination + path[len(source):]
+                for path in existing
+                if path == source or path.startswith(source + '/')
+            }
+            if targets & existing:
+                raise ValueError('Destination contains existing files or folders')
+        return strategy.move_folder(source, destination)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception('Strategy folder move failed')
+        raise HTTPException(500, 'Unable to move strategy folder')
+
+
+@app.delete('/strategy/folder')
+def strategy_folder_delete(
+    request: ResearchFolderDelete,
+    x_research_password: str | None = Header(default=None),
+):
+    verify_research_password(x_research_password)
+    try:
+        return strategy.delete_folder(request.folder)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        logging.exception('Strategy folder deletion failed')
+        raise HTTPException(500, 'Unable to delete strategy folder')
