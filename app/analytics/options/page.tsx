@@ -4,6 +4,7 @@ import {RefreshCcw, Play, Info} from 'lucide-react';
 
 type Mode='single'|'compare'|'cross'|'inst'|'daynight';
 const ALL='__ALL__';
+const COMBINED='__COMBINED__';
 const modes:{id:Mode;label:string}[]=[
  {id:'single',label:'Single Day'}, {id:'compare',label:'Two Days'},
  {id:'cross',label:'Cross Expiry'}, {id:'inst',label:'Institutions'},
@@ -48,7 +49,7 @@ export default function Options(){
    const data=await request('/expiries');
    const values=data.expiries as string[];
    setExpiryOptions(values);
-   if(values.length&&expiry!==ALL&&!values.includes(expiry))setExpiry(values[0]);
+   if(values.length&&expiry!==ALL&&expiry!==COMBINED&&!values.includes(expiry))setExpiry(values[0]);
    setSelectedExpiries(old=>{
     const retained=old.filter(v=>values.includes(v));
     return retained.length?retained:values.slice(0,3);
@@ -78,7 +79,7 @@ export default function Options(){
    <div className="fields">
     <label>{mode==='inst'?'Analysis Date':'Date 1 / Day Date'}<input type="date" value={date1} onChange={e=>setDate1(e.target.value)}/></label>
     {second&&<label>{mode==='daynight'?'Night Data Label Date':'Date 2'}<input type="date" value={date2} onChange={e=>setDate2(e.target.value)}/></label>}
-    {mode!=='inst'&&(mode==='cross'?<label>Expiries (multiple)<select multiple size={4} value={selectedExpiries} onChange={e=>setSelectedExpiries(Array.from(e.target.selectedOptions).map(o=>o.value))}>{expiryOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>:<label>Expiry<select value={expiry} onChange={e=>setExpiry(e.target.value)}>{<option value={ALL}>All Expiries</option>}{expiry!==ALL&&!expiryOptions.includes(expiry)&&<option value={expiry}>{expiry}</option>}{expiryOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>)}
+    {mode!=='inst'&&(mode==='cross'?<label>Expiries (multiple)<select multiple size={4} value={selectedExpiries} onChange={e=>setSelectedExpiries(Array.from(e.target.selectedOptions).map(o=>o.value))}>{expiryOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>:<label>Expiry<select value={expiry} onChange={e=>setExpiry(e.target.value)}>{<><option value={ALL}>All Expiries — Separate</option><option value={COMBINED}>All Expiries — Combined</option></>}{expiry!==ALL&&expiry!==COMBINED&&!expiryOptions.includes(expiry)&&<option value={expiry}>{expiry}</option>}{expiryOptions.map(x=><option key={x} value={x}>{x}</option>)}</select></label>)}
     {mode==='inst'?<label>Lookback (Calendar Days)<input type="number" min="1" max="90" value={lookback} onChange={e=>setLookback(e.target.value)}/></label>:<label>Moneyness Range (%)<input type="number" min="1" max="30" value={atmRange} onChange={e=>setAtmRange(e.target.value)}/></label>}
    </div>
    <label className="cache-toggle"><input type="checkbox" checked={force} onChange={e=>setForce(e.target.checked)}/> Force refresh cached data</label>
