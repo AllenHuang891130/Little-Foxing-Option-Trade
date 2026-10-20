@@ -105,6 +105,126 @@ def expiries(q:Query):
         logging.exception('Expiry load failed')
         raise HTTPException(422,str(e)) from e
 
+# Paste this block ABOVE @app.post('/analyze') in backend/server.py.
+# Requires existing imports: numpy as np, matplotlib.pyplot as plt, v4_engine as v4.
+
+def _all_weighted_smile(data, cp, grid, normalized=False):
+    """Per-expiry fixed-moneyness smile, volume-weighted across expiries.
+
+    Only valid IV and positive-volume quotes contribute. No extrapolation.
+    The normalized variant subtracts each expiry's own ATM IV first.
+    """
+    d = v4.tidy(data)
+    numerator = np.zeros(len(grid), dtype=float)
+    denominator = np.zeros(len(grid), dtype=float)
+    for _, group in d[d.cp.eq(cp)].groupby('expiry'):
+        g = group.loc[
+            group.IV.between(1, 250)
+            & group.moneyness.notna()
+            & np.isfinite(group.moneyness)
+            & group.volume.gt(0)
+        ].copy()
+        if g.empty:
+            continue
+        # Multiple records at one moneyness: first aggregate with volume weights.
+        g['weighted_iv'] = g.IV * g.volume
+        curve = g.groupby('moneyness', as_index=False).agg(
+            weighted_iv=('weighted_iv', 'sum'),
+            volume=('volume', 'sum'),
+        ).sort_values('moneyness')
+        if len(curve) < 2:
+            continue
+        x = curve.moneyness.to_numpy(dtype=float)
+        iv = curve.weighted_iv.to_numpy(dtype=float) / curve.volume.to_numpy(dtype=float)
+        vol = curve.volume.to_numpy(dtype=float)
+        if normalized:
+            if not (x[0] <= 0 <= x[-1]):
+                continue
+            iv = iv - np.interp(0, x, iv)
+        values = np.interp(grid, x, iv, left=np.nan, right=np.nan)
+        weights = np.interp(grid, x, vol, left=0, right=0)
+        ok = np.isfinite(values) & (weights > 0)
+        numerator[ok] += values[ok] * weights[ok]
+        denominator[ok] += weights[ok]
+    return np.divide(numerator, denominator,
+                     out=np.full(len(grid), np.nan), where=denominator > 0)
+
+
+def _combined_plot(mode, a, b, rng):
+    """Render exactly one 2x2 chart for all expiries combined."""
+    a = v4.tidy(a)
+    b = v4.tidy(b) if b is not None else None
+    if a.empty or (b is not None and b.empty):
+        raise ValueError('No data for combined analysis')
+    fig, ax = plt.subplots(2, 2, figsize=(16, 10), constrained_layout=True)
+    f = a.F.median()
+    if not np.isfinite(f):
+        raise ValueError('Missing MTX forward reference')
+    a0 = a[a.strike.between(f * (1-rng), f * (1+rng))]
+    b0 = b[b.strike.between(f * (1-rng), f * (1+rng))] if b is not None else None
+    if mode == 'single':
+        v4.plot_strike(ax[0, 0], a0, 'oi', 'All Expiries — Open Interest by Strike')
+        v4.plot_strike(ax[0, 1], a0, 'volume', 'All Expiries — Volume by Strike')
+    elif mode == 'compare':
+        # Retain original V4's same-strike intersection for OI change.
+        delta = a0.groupby(['strike', 'cp']).oi.sum().rename('oi1').to_frame().join(
+            b0.groupby(['strike', 'cp']).oi.sum().rename('oi2'), how='inner')
+        delta['oi'] = delta.oi2 - delta.oi1
+        v4.plot_strike(ax[0, 0], delta.reset_index(), 'oi', 'All Expiries — Change in OI (D2 - D1)')
+        _combined_grouped_bars(ax[0, 1], a0, b0, 'volume', 'Daily Volume by Strike (Both Dates)', 'D1', 'D2')
+    else:
+        _combined_grouped_bars(ax[0, 0], b0, None, 'volume', 'All Expiries — Night Volume by Strike', 'Night')
+        _combined_grouped_bars(ax[0, 1], a0, None, 'oi', 'All Expiries — Day Open Interest by Strike', 'Day')
+    grid = np.linspace(-rng, rng, 201)
+    datasets = [('Day', a, '-')] if mode == 'single' else (
+        [('D1', a, '--'), ('D2', b, '-')] if mode == 'compare'
+        else [('Day', a, '--'), ('Night', b, '-')]
+    )
+    for cp in ('Call', 'Put'):
+        for label, data, style in datasets:
+            name = cp if mode == 'single' else f'{label} {cp}'
+            ax[1, 0].plot(grid*100, _all_weighted_smile(data, cp, grid),
+                          ls=style, color=v4.COLORS[cp], label=name)
+            ax[1, 1].plot(grid*100, _all_weighted_smile(data, cp, grid, True),
+                          ls=style, color=v4.COLORS[cp], label=name)
+    for axis, title, ylabel in [
+        (ax[1, 0], 'All Expiries — Volume-Weighted IV Smile', 'IV (%)'),
+        (ax[1, 1], 'All Expiries — Volume-Weighted ATM-Normalized IV', 'IV Difference (pp)'),
+    ]:
+        axis.set_title(title)
+        axis.set_xlabel('Moneyness K/F - 1 (%)')
+        axis.set_ylabel(ylabel)
+        axis.axvline(0, color='gray', ls=':')
+        axis.grid(alpha=.2)
+        axis.legend(fontsize=8)
+    return {'expiry_count_day1': int(a.expiry.nunique()),
+            'expiry_count_day2': int(b.expiry.nunique()) if b is not None else None,
+            'weighting': 'Positive contract volume, separately by expiry and Call/Put',
+            'oi_volume': 'Sum across expiries at identical strike'}
+
+
+def _combined_grouped_bars(axis, first, second, field, title, label1, label2=None):
+    datasets = [(label1, first)] if second is None else [(label1, first), (label2, second)]
+    strikes = sorted(set().union(*(set(d.strike.dropna()) for _, d in datasets)))
+    if not strikes:
+        axis.set_title(title + ' (no strikes)')
+        return
+    x = np.arange(len(strikes))
+    width = .8 / (2 * len(datasets))
+    for k, (label, d) in enumerate(datasets):
+        for j, cp in enumerate(('Call', 'Put')):
+            y = d[d.cp.eq(cp)].groupby('strike')[field].sum().reindex(strikes).fillna(0)
+            offset = (k*2+j-(2*len(datasets)-1)/2)*width
+            axis.bar(x+offset, y, width=width, label=f'{label} {cp}', alpha=.8,
+                     color=v4.COLORS[cp] if second is None else None)
+    skip = max(1, int(np.ceil(len(strikes)/13)))
+    axis.set_xticks(x[::skip])
+    axis.set_xticklabels([f'{v:,.0f}' for v in strikes[::skip]], rotation=45, ha='right', fontsize=8)
+    axis.set_title(title)
+    axis.legend(fontsize=8)
+    axis.grid(axis='y', alpha=.2)
+
+
 @app.post('/analyze')
 def analyze(q: Query):
     with plot_lock:
@@ -132,6 +252,15 @@ def analyze(q: Query):
                 b = v4.load_day(fmt(q.date2), q.force)
             else:
                 a = v4.load_day(fmt(q.date1), q.force)
+
+            if q.expiry == '__COMBINED__' and q.mode in ('single', 'compare', 'daynight'):
+                meta = _combined_plot(q.mode, a, b if q.mode != 'single' else None, rng)
+                fig = plt.figure(plt.get_fignums()[-1])
+                out = io.BytesIO()
+                fig.savefig(out, format='png', dpi=130, bbox_inches='tight', facecolor='white')
+                img = base64.b64encode(out.getvalue()).decode('ascii')
+                return {'image': 'data:image/png;base64,' + img, 'meta': meta, 'mode': q.mode,
+                        'note': 'All expiries combined: OI/volume summed by strike; per-expiry IV smiles volume-weighted at fixed moneyness.'}
 
             if all_mode:
                 # Only contracts present in BOTH datasets are compared.
