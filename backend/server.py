@@ -386,3 +386,62 @@ def research_tree():
             detail="Unable to list research tree",
         )
 
+
+# ============================================================
+# RESEARCH LIBRARY - FOLDER ADMIN API
+# ============================================================
+
+class ResearchFolderMove(BaseModel):
+    source: str
+    destination: str
+
+
+class ResearchFolderDelete(BaseModel):
+    folder: str
+
+
+@app.post("/research/folder/move")
+def research_folder_move(
+    request: ResearchFolderMove,
+    x_research_password: str | None = Header(default=None),
+):
+    verify_research_password(x_research_password)
+
+    try:
+        return research.move_folder(
+            request.source,
+            request.destination,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+    except Exception:
+        logging.exception("Research folder move failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to move research folder",
+        )
+
+
+@app.delete("/research/folder")
+def research_folder_delete(
+    request: ResearchFolderDelete,
+    x_research_password: str | None = Header(default=None),
+):
+    verify_research_password(x_research_password)
+
+    try:
+        return research.delete_folder(request.folder)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+    except Exception:
+        logging.exception("Research folder deletion failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to delete research folder",
+        )
