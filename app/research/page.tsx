@@ -149,7 +149,10 @@ export default function Research() {
     try {
       await action();
       setMessage(success);
-      await Promise.all([load(folder), loadTree()]);
+      
+      await loadTree();
+      await load(folder);
+
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Operation failed');
     } finally { setBusy(false); }
@@ -295,11 +298,17 @@ export default function Research() {
     }, `${folderItem ? 'Folder' : 'File'} deleted successfully.`);
   }
 
+  
   function navigateTo(path: string) {
-    setFolder(path);
     setSearch('');
     setMessage('');
+    setError('');
+    setFolder(path);
+  
+    // Always refresh, including when clicking Home at root.
+    void load(path);
   }
+
 
   const query = search.trim().toLocaleLowerCase();
   const visible: StorageItem[] = (query ? tree : items)
