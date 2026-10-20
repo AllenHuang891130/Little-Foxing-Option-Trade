@@ -218,3 +218,58 @@ def move_file(source, destination):
         "source": source,
         "destination": destination,
     }
+
+def list_all_items(max_items=3000):
+    """Recursively list all research files and folders."""
+    if max_items < 1:
+        raise ValueError("max_items must be positive")
+
+    results = []
+    pending = [""]
+    visited = set()
+
+    while pending:
+        folder = pending.pop()
+
+        if folder in visited:
+            continue
+
+        visited.add(folder)
+
+        # list_items currently returns up to 1000 entries.
+        items = list_items(folder)
+
+        if len(items) >= 1000:
+            raise ValueError(
+                f"Folder '{folder or '/'}' has at least "
+                "1000 entries. Pagination is required."
+            )
+
+        for item in items:
+            name = item.get("name", "")
+
+            if name in (".folder", ".emptyFolderPlaceholder"):
+                continue
+
+            if not name:
+                continue
+
+            path = f"{folder}/{name}" if folder else name
+            is_folder = item.get("id") is None
+
+            results.append({
+                **item,
+                "path": path,
+                "is_folder": is_folder,
+            })
+
+            if len(results) > max_items:
+                raise ValueError(
+                    "Research Library exceeds the "
+                    f"{max_items} item search limit."
+                )
+
+            if is_folder:
+                pending.append(path)
+
+    return results
