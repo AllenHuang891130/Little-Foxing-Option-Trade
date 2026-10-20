@@ -327,15 +327,27 @@ def research_download(path: str):
         content = research.download_file(path)
         filename = PurePosixPath(path).name
 
+        
+        is_pdf = filename.lower().endswith(".pdf")
+
         return Response(
             content=content,
-            media_type="application/octet-stream",
+            media_type=(
+                "application/pdf"
+                if is_pdf
+                else "application/octet-stream"
+            ),
             headers={
-                "Content-Disposition":
-                    f"attachment; filename*=UTF-8''{quote(filename)}",
+                "Content-Disposition": (
+                    f"inline; filename*=UTF-8''{quote(filename)}"
+                    if is_pdf
+                    else f"attachment; filename*=UTF-8''{quote(filename)}"
+                ),
                 "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
             },
         )
+
 
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
