@@ -418,112 +418,11 @@ def build_day(ds):
 
 
 def load_day(ds, force=False):
-    import time
+    """Canonical day loader shared by Single Day, Two Days and Cross Expiry.
 
-    ds = pd.Timestamp(ds).strftime('%Y%m%d')
-    path = ROOT / f'TXO_MTX_{ds}.csv'
-
-    total_start = time.perf_counter()
-
-    # 1. Check local cache or restore from Supabase.
-    if not force:
-        if path.exists():
-            logging.warning("[CACHE] LOCAL HIT: %s", path.name)
-        else:
-            logging.warning("[CACHE] Checking Supabase: %s", path.name)
-
-            t0 = time.perf_counter()
-            restored = restore_cloud_cache(path, force=False)
-
-            logging.warning(
-                "[PERF] Supabase restore: %.2f sec",
-                time.perf_counter() - t0
-            )
-
-            if restored:
-                logging.warning("[CACHE] SUPABASE HIT: %s", path.name)
-            else:
-                logging.warning("[CACHE] SUPABASE MISS: %s", path.name)
-
-    # 2. Read existing cache.
-    if path.exists() and not force:
-        t0 = time.perf_counter()
-
-        d = pd.read_csv(path, dtype={'expiry': str})
-
-        for c in ['date', 'expiry_date', 'official_expiry_date']:
-            if c in d:
-                d[c] = pd.to_datetime(d[c], errors='coerce')
-
-        for c in [
-            'strike', 'oi', 'volume', 'IV', 'F', 'DTE',
-            'moneyness', 'bid', 'ask', 'price', 'T'
-        ]:
-            if c in d:
-                d[c] = pd.to_numeric(d[c], errors='coerce')
-
-        if 'OTM' in d:
-            d['OTM'] = d['OTM'].astype(str).str.lower().eq('true')
-
-        logging.warning(
-            "[PERF] CSV read and parse: %.2f sec | rows=%d",
-            time.perf_counter() - t0,
-            len(d)
-        )
-
-        # 3. Preserve the original Black-76 IV recalculation.
-        t0 = time.perf_counter()
-        
-        # Reuse previously calculated IV when available.
-        # Recalculate only if IV data is missing.
-        if 'IV' not in d.columns or d['IV'].notna().sum() == 0:
-            logging.warning("[IV] Missing cached IV; recalculating")
-            d = recalculate_iv(d)
-        else:
-            logging.warning(
-                "[IV] Reusing cached IV: %d / %d valid",
-                d['IV'].notna().sum(),
-                len(d)
-            )
-
-
-        logging.warning(
-            "[PERF] IV recalculation: %.2f sec",
-            time.perf_counter() - t0
-        )
-
-        logging.warning(
-            "[PERF] Total load_day: %.2f sec",
-            time.perf_counter() - total_start
-        )
-
-        return d
-
-    # 4. Download and process when cache is unavailable.
-    t0 = time.perf_counter()
-    d = build_day(ds)
-
-    logging.warning(
-        "[PERF] TAIFEX download and processing: %.2f sec",
-        time.perf_counter() - t0
-    )
-
-    # 5. Save locally and persist to Supabase.
-    t0 = time.perf_counter()
-    d.to_csv(path, index=False, encoding='utf-8-sig')
-    save_cloud_cache(path)
-
-    logging.warning(
-        "[PERF] CSV save and cloud upload: %.2f sec",
-        time.perf_counter() - t0
-    )
-
-    logging.warning(
-        "[PERF] Total load_day: %.2f sec",
-        time.perf_counter() - total_start
-    )
-
-    return d
+    Uses the same validated DAY data/cache as Day vs Night.
+    """
+    return load_market_session(ds, session='day', force=force)
 
 
 print('Market data functions loaded.')
@@ -744,6 +643,9 @@ def normalize_session_fut(raw,ds,session):
     return f[['expiry','F']].reset_index(drop=True)
 
 
+CACHE_VERSION = 'V5_MTX_FALLBACK_UNIFIED_DAY'
+
+
 def load_market_session(ds, session='day', force=False):
     import time
 
@@ -752,7 +654,7 @@ def load_market_session(ds, session='day', force=False):
     if session not in ('day', 'night'):
         raise ValueError('session must be day or night')
 
-    path = ROOT / f'TXO_MTX_{ds}_{session.upper()}.csv'
+    path = ROOT / f'TXO_MTX_{ds}_{session.upper()}_{CACHE_VERSION}.csv'
     total_start = time.perf_counter()
 
     # =====================================================
@@ -784,6 +686,12 @@ def load_market_session(ds, session='day', force=False):
         t0 = time.perf_counter()
 
         d = pd.read_csv(path, dtype={'expiry': str})
+        if ('cache_version' not in d.columns or
+                not d['cache_version'].eq(CACHE_VERSION).all()):
+            logging.warning('[CACHE] Version mismatch, rebuilding: %s', path.name)
+            path.unlink(missing_ok=True)
+            return load_market_session(ds, session=session, force=True)
+
 
         for col in ['date', 'expiry_date', 'official_expiry_date']:
             if col in d:
@@ -898,6 +806,8 @@ def load_market_session(ds, session='day', force=False):
     # 6. Save locally and upload to Supabase
     # =====================================================
     t0 = time.perf_counter()
+
+    o['cache_version'] = CACHE_VERSION
 
     o.to_csv(
         path,
