@@ -292,6 +292,58 @@ def recalculate_iv(d):
     return d
 
 
+
+def assign_mtx_forward(options, futures, ds):
+    """Match exact MTX, then live same-month MTX, then live front-month MTX.
+
+    Never changes TXO expiry or DTE. Labels the actual MTX contract used.
+    """
+    o = options.copy()
+    trade_date = pd.Timestamp(ds).normalize()
+    f = futures.copy()
+    f['expiry'] = f['expiry'].astype(str).str.strip().str.upper()
+    f['F'] = pd.to_numeric(f['F'], errors='coerce')
+    f = f.loc[f['F'].gt(0) & np.isfinite(f['F'])].drop_duplicates('expiry')
+    if f.empty:
+        raise ValueError('No valid MTX futures price')
+
+    fm = f.set_index('expiry')['F'].to_dict()
+    o['expiry'] = o['expiry'].astype(str).str.strip().str.upper()
+    o['F'] = o['expiry'].map(fm)
+    o['forward_source'] = np.where(o['F'].notna(), 'Exact MTX', '')
+    o['forward_contract'] = o['expiry'].where(o['F'].notna(), '')
+
+    # Monthly contracts only: the third Wednesday must still be in the future.
+    monthly = {}
+    for code, value in fm.items():
+        if not re.fullmatch(r'\d{6}', code):
+            continue
+        expiry_dt = expiry_date(code)
+        if pd.notna(expiry_dt) and expiry_dt >= trade_date:
+            monthly[code] = value
+
+    month_code = o['expiry'].str[:6]
+    same_month = month_code.map(monthly)
+    same_mask = o['F'].isna() & same_month.notna()
+    o.loc[same_mask, 'F'] = same_month[same_mask]
+    o.loc[same_mask, 'forward_source'] = 'Same-Month MTX Proxy'
+    o.loc[same_mask, 'forward_contract'] = month_code[same_mask]
+
+    if monthly:
+        front_code = min(monthly, key=lambda code: expiry_date(code))
+        front_mask = o['F'].isna()
+        o.loc[front_mask, 'F'] = monthly[front_code]
+        o.loc[front_mask, 'forward_source'] = 'Front-Month MTX Proxy'
+        o.loc[front_mask, 'forward_contract'] = front_code
+
+    missing = o['F'].isna()
+    if missing.any():
+        o.loc[missing, 'forward_source'] = 'Unavailable'
+        o.loc[missing, 'forward_contract'] = ''
+        logging.warning('Missing MTX forward for %d TXO rows on %s', int(missing.sum()), ds)
+    return o
+
+
 def build_day(ds):
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -338,25 +390,7 @@ def build_day(ds):
         o = normalize_opt(ro, ds)
         f = normalize_fut(rf, ds)
 
-    fm = f.set_index('expiry')['F'].to_dict()
-
-    monthly = {
-        str(k)[:6]: v
-        for k, v in fm.items()
-        if re.fullmatch(r'\d{6}', str(k))
-    }
-
-    o['F'] = o['expiry'].map(fm)
-
-    o['forward_source'] = np.where(
-        o['F'].notna(),
-        'Exact MTX',
-        'Monthly MTX proxy'
-    )
-
-    o['F'] = o['F'].fillna(
-        o['expiry'].str[:6].map(monthly)
-    )
+    o = assign_mtx_forward(o, f, ds)
 
     o['moneyness'] = o['strike'] / o['F'] - 1
 
@@ -816,25 +850,7 @@ def load_market_session(ds, session='day', force=False):
     o = normalize_session_opt(ro, ds, session)
     f = normalize_session_fut(rf, ds, session)
 
-    fm = f.set_index('expiry')['F'].to_dict()
-
-    monthly = {
-        str(k)[:6]: v
-        for k, v in fm.items()
-        if re.fullmatch(r'\d{6}', str(k))
-    }
-
-    o['F'] = o['expiry'].map(fm)
-
-    o['forward_source'] = np.where(
-        o['F'].notna(),
-        'Exact MTX',
-        'Monthly MTX proxy'
-    )
-
-    o['F'] = o['F'].fillna(
-        o['expiry'].str[:6].map(monthly)
-    )
+    o = assign_mtx_forward(o, f, ds)
 
     o['moneyness'] = o['strike'] / o['F'] - 1
 
@@ -957,4 +973,3 @@ def day_night_comparison(day,night,exp,rng=.06):
     print('Forward Day / Night:',round(F1,2),round(F2,2));display(pd.DataFrame(rows))
     print('Night IV: closing price or valid bid/ask midpoint. Night OI delta only if valid and comparable.')
     print('DTE uses calendar days, not intraday time-to-expiry precision.')
-
