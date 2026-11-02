@@ -36,8 +36,20 @@ function payload(mode:Mode,s:Settings){
 function signature(mode:Mode,s:Settings){
  const p=payload(mode,s);
  // Force refresh changes the fetch behavior, not the meaning of the plotted result.
- return JSON.stringify(mode==='poc'?{...p,force:undefined}:{...p,force:undefined,expiries:mode==='cross'?[...('expiries' in p?p.expiries:[])].sort():[]});
-}
+ 
+return JSON.stringify(
+  mode === 'poc'
+    ? { ...p, force: undefined }
+    : {
+        ...p,
+        force: undefined,
+        expiries:
+          mode === 'cross'
+            ? [...(p.expiries ?? [])].sort()
+            : [],
+      }
+);
+
 async function request(path:string,body:ReturnType<typeof payload>){
  const controller=new AbortController();
  const timer=setTimeout(()=>controller.abort(),300000);
