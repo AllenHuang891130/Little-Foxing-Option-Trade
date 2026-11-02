@@ -826,3 +826,51 @@ def strategy_folder_delete(
     except Exception:
         logging.exception('Strategy folder deletion failed')
         raise HTTPException(500, 'Unable to delete strategy folder')
+
+# ============================================================
+# MTX VOLUME PROFILE — isolated from TXO V4 and library APIs
+# ============================================================
+import mtx_volume_profile as mtx_poc
+from fastapi.responses import Response
+
+class PocQuery(BaseModel):
+    date1: date
+    session: Literal['ALL', 'DAY', 'NIGHT'] = 'ALL'
+    expiry: str = 'AUTO'
+    value_area_pct: float = Field(default=70, gt=0, le=100)
+    price_step: float = Field(default=1, gt=0, le=100)
+    top_n: int = Field(default=10, ge=1, le=50)
+    force: bool = False
+
+@app.post('/poc/expiries')
+def poc_expiries(q: PocQuery):
+    try:
+        return {'expiries': mtx_poc.available(q.date1, q.force)}
+    except Exception as exc:
+        logging.exception('POC expiries failed')
+        raise HTTPException(422, str(exc)) from exc
+
+@app.post('/poc/analyze')
+def poc_analyze(q: PocQuery):
+    try:
+        summary, profile = mtx_poc.calculate(
+            q.date1, q.session, q.expiry, q.value_area_pct / 100,
+            q.price_step, q.top_n, q.force)
+        storage_key = mtx_poc.cache_profile(summary, profile)
+        with plot_lock:
+            fig = mtx_poc.draw(summary, profile)
+            try:
+                output = io.BytesIO()
+                fig.savefig(output, format='png', dpi=110, bbox_inches='tight', facecolor='white')
+            finally:
+                plt.close(fig)
+        csv_bytes = profile.to_csv(index=False).encode('utf-8-sig')
+        return {
+            'image': 'data:image/png;base64,' + base64.b64encode(output.getvalue()).decode('ascii'),
+            'meta': {**summary, 'storage_key': storage_key},
+            'note': 'TAIFEX tick trades; B+S / 2; POC-centered contiguous value area.',
+            'csv': 'data:text/csv;base64,' + base64.b64encode(csv_bytes).decode('ascii'),
+        }
+    except Exception as exc:
+        logging.exception('POC analysis failed')
+        raise HTTPException(422, str(exc)) from exc
