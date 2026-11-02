@@ -35,21 +35,12 @@ function payload(mode:Mode,s:Settings){
 }
 function signature(mode:Mode,s:Settings){
  const p=payload(mode,s);
- // Force refresh changes the fetch behavior, not the meaning of the plotted result.
- 
-return JSON.stringify(
-  mode === 'poc'
-    ? { ...p, force: undefined }
-    : {
-        ...p,
-        force: undefined,
-        expiries:
-          mode === 'cross'
-            ? [...(p.expiries ?? [])].sort()
-            : [],
-      }
-);
-
+ if(mode==='poc'){
+  return JSON.stringify({...p,force:undefined});
+ }
+ const expiries = 'expiries' in p && Array.isArray(p.expiries) ? p.expiries : [];
+ return JSON.stringify({...p,force:undefined,expiries:mode==='cross'?[...expiries].sort():[]});
+}
 async function request(path:string,body:ReturnType<typeof payload>){
  const controller=new AbortController();
  const timer=setTimeout(()=>controller.abort(),300000);
