@@ -1,9 +1,11 @@
+
 """Little Foxing MTX tick-volume profile. Isolated private Supabase cache."""
 import io
 import os
 import re
 import zipfile
-from datetime import date
+from datetime import date, timedelta, datetime
+from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
 import numpy as np
@@ -35,8 +37,21 @@ def _get(key):
     url, _ = _config()
     endpoint = f'{url}/storage/v1/object/authenticated/{BUCKET}/{quote(key, safe="/")}'
     r = requests.get(endpoint, headers=_headers(), timeout=(10, 120))
-    if r.status_code == 404:
-        return None
+    if r.status_code in (400, 404):
+        # Supabase Storage may return HTTP 400 for a missing object.
+        # Never swallow unrelated 400 errors (permissions, invalid bucket, etc.).
+        try:
+            detail = r.json()
+        except ValueError:
+            detail = {}
+        code = str(detail.get('error', '') or detail.get('code', '')).lower()
+        msg = str(detail.get('message', '') or detail.get('error_description', '')).lower()
+        missing = ('not_found' in code or 'notfound' in code or
+                   'no such object' in msg or 'object not found' in msg or
+                   'the resource was not found' in msg or 'not found' in msg and 'object' in msg)
+        if missing:
+            return None
+        raise RuntimeError(f'Supabase Storage read failed ({r.status_code}): {r.text[:350]}')
     r.raise_for_status()
     return r.content
 
@@ -51,7 +66,11 @@ def _put(key, data, content_type):
 def _zip_bytes(day, force=False):
     name = f'Daily_{day:%Y_%m_%d}.zip'
     key = f'raw/{name}'
-    content = None if force else _get(key)
+    # The current trading-date ZIP can be published in stages (night then day).
+    # Re-fetch today's and yesterday's files on every request to avoid stale data.
+    # Historical dates older than yesterday use the immutable storage cache.
+    recent = day >= datetime.now(ZoneInfo('Asia/Taipei')).date() - timedelta(days=1)
+    content = None if (force or recent) else _get(key)
     if content is not None and not zipfile.is_zipfile(io.BytesIO(content)):
         content = None
     if content is None:
