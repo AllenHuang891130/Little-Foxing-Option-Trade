@@ -156,16 +156,13 @@ def _observation_time(day, session):
 
 def _session_frame(day, session, observation_time=None, oi_day=None,
                    force=False, include_0dte=None):
-    """Night OI is the *last available* official day snapshot.
+    """Day uses official OI; night uses traded volume as Gamma weight.
 
-    oi_day is an explicit as-of date, NOT automatically the target trading
-    date (which would introduce look-ahead into the night session).
+    oi_day remains a deprecated compatibility argument and is ignored.
     """
     ds = pd.Timestamp(day).strftime('%Y%m%d')
     obs = (pd.Timestamp(observation_time) if observation_time is not None
            else _observation_time(day, session))
-    if session == 'night' and oi_day is None:
-        raise ValueError('Night analysis requires explicit oi_day (last published official OI date) to avoid look-ahead')
     if include_0dte is None:
         include_0dte = session == 'night'
     market = v4.load_market_session(ds, session=session, force=force).copy()
@@ -175,21 +172,16 @@ def _session_frame(day, session, observation_time=None, oi_day=None,
         market[col] = pd.to_numeric(market[col], errors='coerce')
     market['expiry_date'] = pd.to_datetime(market['expiry_date'], errors='coerce')
     if session == 'night':
-        # This is the sole OI source. No volume-to-OI substitution.
-        oi_date = pd.Timestamp(oi_day).normalize()
-        if oi_date > obs.normalize():
-            raise ValueError('oi_day is later than the night observation date (look-ahead)')
-        oi = v4.load_market_session(oi_date.strftime('%Y%m%d'),session='day',force=force).copy()
-        oi['expiry'] = oi['expiry'].astype(str).str.strip().str.upper()
-        oi['cp'] = oi['cp'].astype(str).str.strip().replace({'C':'Call','P':'Put','CALL':'Call','PUT':'Put'})
-        oi['strike'] = pd.to_numeric(oi['strike'],errors='coerce')
-        oi['oi'] = pd.to_numeric(oi['oi'],errors='coerce')
-        oi = oi.groupby(['expiry','strike','cp'],as_index=False)['oi'].sum(min_count=1)
-        market = market.drop(columns=['oi'],errors='ignore').merge(oi,on=['expiry','strike','cp'],how='left',validate='many_to_one')
-        oi_source = f'TAIFEX official day OI: {oi_date.date()} (as-of snapshot)'
+        # Night: session traded volume is the GEX weighting proxy, NOT official OI.
+        # Keep 'oi' as the internal engine's weight column for backward compatibility.
+        # Do not merge any official OI snapshot or double count B+S volume.
+        market['oi'] = market['volume'].clip(lower=0)
+        oi_source = f'TAIFEX night traded volume: {pd.Timestamp(day).date()} (activity proxy; not OI)'
+        weight_source = 'night_session_volume'
     else:
-        market['oi'] = pd.to_numeric(market['oi'],errors='coerce')
+        market['oi'] = pd.to_numeric(market['oi'], errors='coerce')
         oi_source = f'TAIFEX official day OI: {pd.Timestamp(day).date()}'
+        weight_source = 'official_day_oi'
     # TXO expiration normally 13:30 Taiwan time; override if a special
     # contract has different settlement hours. This is a model assumption.
     expiry_ts = market['expiry_date'] + pd.Timedelta(hours=13,minutes=30)
@@ -214,7 +206,7 @@ def _session_frame(day, session, observation_time=None, oi_day=None,
                                     market.loc[needs_iv,'cp'])]
     market['iv_valid'] = market['iv'].between(.005,2.5)
     market['expiry_type'] = np.where(market.expiry.str.fullmatch(r'\d{6}'),'monthly','weekly')
-    return market, obs, oi_source
+    return market, obs, oi_source, weight_source
 
 
 def _select_expiries(d, expiry_scope, selected_expiries):
@@ -231,7 +223,7 @@ def _select_expiries(d, expiry_scope, selected_expiries):
     raise ValueError('Unknown expiry scope')
 
 
-def _analyze_frame(d, day, session, obs, oi_source, position_mode,
+def _analyze_frame(d, day, session, obs, oi_source, weight_source, position_mode,
                    iv_mode, profile_range_pct, profile_points):
     if d.empty:
         raise ValueError('No matched OI/price/IV contracts in selected session and expiry')
@@ -275,7 +267,7 @@ def _analyze_frame(d, day, session, obs, oi_source, position_mode,
         elif a[i]*a[i+1]<0:
             flips.append(float(xs[i]-a[i]*(xs[i+1]-xs[i])/(a[i+1]-a[i])))
     meta={'date':str(pd.Timestamp(day).date()),'session':session,
-          'observation_time':str(obs),'oi_source':oi_source,
+          'observation_time':str(obs),'oi_source':oi_source,'weight_source':weight_source,
           'reference_forward':front,'position_mode':position_mode,
           'included_expiries':sorted(d.expiry.unique().tolist()),
           'contracts':int(len(d)),'missing_iv_contracts':missing,
@@ -283,7 +275,7 @@ def _analyze_frame(d, day, session, obs, oi_source, position_mode,
           'net_gex_twd_per_1pct':float(d.signed_gex.sum()),
           'gamma_flips':flips,'iv_mode':iv_mode,
           'zero_dte_used':int(d.calendar_dte.eq(0).sum()),
-          'note':'Dealer positioning signs are hypothetical. Night OI is an as-of daily snapshot; timestamps and expiry time are assumptions.'}
+          'note':'Dealer positioning signs are hypothetical. Day uses official OI; night uses session traded volume as an activity proxy, not OI. Timestamps and expiry time are assumptions.'}
     return meta,strike.reset_index(),p
 
 
@@ -293,15 +285,15 @@ def analyze_session(day, session='day', expiry_scope='combined', selected_expiri
                     profile_range_pct=10.,profile_points=201,force=False):
     """Return (meta, GEX by strike, Gamma profile, activity by strike).
 
-    Activity is Gamma-weighted volume, *not* dealer inventory/GEX.
-    Night analysis requires oi_day (the last actually published OI date).
+    Day GEX uses official OI; night uses session volume as a weight proxy.
+    The night result is Gamma-weighted activity, not dealer inventory.
     """
     if position_mode not in MODES: raise ValueError('Unknown position mode')
     if not (1<=profile_range_pct<=30 and 51<=profile_points<=501):
         raise ValueError('Invalid profile grid')
-    d,obs,oi_source=_session_frame(day,session,observation_time,oi_day,force,include_0dte)
+    d,obs,oi_source,weight_source=_session_frame(day,session,observation_time,oi_day,force,include_0dte)
     d=_select_expiries(d,expiry_scope,selected_expiries)
-    result=_analyze_frame(d,day,session,obs,oi_source,position_mode,iv_mode,profile_range_pct,profile_points)
+    result=_analyze_frame(d,day,session,obs,oi_source,weight_source,position_mode,iv_mode,profile_range_pct,profile_points)
     valid=d[d.iv_valid].copy()
     g=gamma76(valid.F.to_numpy(),valid.strike.to_numpy(),valid['T'].to_numpy(),valid.iv.to_numpy())
     valid['gamma_volume_activity']=(g*valid.volume.fillna(0).clip(lower=0).to_numpy()*
@@ -311,220 +303,87 @@ def analyze_session(day, session='day', expiry_scope='combined', selected_expiri
     return (*result,activity)
 
 
-def analyze_day_night(day, oi_day, selected_expiries=None, expiry_scope='combined',
+def analyze_day_night(day, oi_day=None, selected_expiries=None, expiry_scope='combined',
                       day_observation_time=None,night_observation_time=None,**kwargs):
-    """Compare two snapshots of same trading date. Night must use as-of OI.
-
-    For apples-to-apples price/IV attribution, pass the SAME OI snapshot
-    explicitly to both sessions in a future dedicated attribution study;
-    day mode here uses its own official daily OI.
-    """
+    """Compare day official-OI GEX and night volume-weighted Gamma activity."""
     day_result=analyze_session(day,'day',expiry_scope,selected_expiries,
                                observation_time=day_observation_time,**kwargs)
     night_result=analyze_session(day,'night',expiry_scope,selected_expiries,
                                  oi_day=oi_day,observation_time=night_observation_time,**kwargs)
     return {'day':day_result,'night':night_result,
-            'comparability_note':'Day and night use different as-of OI dates; changes cannot be attributed solely to IV/price.'}
-
+            'comparability_note':'Day is OI-weighted exposure; night is volume-weighted activity. Magnitudes are not directly comparable as position changes.'}
 
 def draw(meta, strikes, profile):
-    """Three panels: Call/Put GEX, Net GEX, Gamma Profile."""
+    """Three panels: absolute Call/Put GEX, signed Net GEX by strike, repriced profile."""
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
 
-    fig, axes = plt.subplots(
-        3, 1,
-        figsize=(15, 15),
-        constrained_layout=True
-    )
-
-    strikes = strikes.sort_values("strike")
-    x = strikes["strike"].to_numpy(dtype=float)
-
+    fig, axes = plt.subplots(3, 1, figsize=(15, 15), constrained_layout=True)
+    strikes = strikes.sort_values('strike')
+    x = strikes['strike'].to_numpy(dtype=float)
     gaps = np.diff(np.unique(x))
-    width = (
-        max(1.0, float(np.median(gaps)) * 0.36)
-        if len(gaps) else 25.0
-    )
-
+    width = max(1.0, float(np.median(gaps)) * .36) if len(gaps) else 25.0
     scale = 1e6
-    ref = meta.get("reference_forward")
+    ref = meta.get('reference_forward')
 
-    # =============================================
-    # 1. Call / Put Absolute GEX
-    # No vertical dashed lines
-    # =============================================
+    # 1) Call/Put absolute GEX. No vertical dashed lines; price labels in legend only.
     ax = axes[0]
-
-    ax.bar(
-        x - width / 2,
-        strikes["call_gex"] / scale,
-        width=width,
-        color="#c65a3a",
-        label="Call absolute GEX"
-    )
-
-    ax.bar(
-        x + width / 2,
-        -strikes["put_gex"] / scale,
-        width=width,
-        color="#3274b8",
-        label="Put absolute GEX (displayed negative)"
-    )
-
-    handles, legend_labels = ax.get_legend_handles_labels()
-
-    for key, name, color in [
-        ("call_wall", "Call Wall", "#c65a3a"),
-        ("put_wall", "Put Wall", "#3274b8"),
-        ("reference_forward", "Reference Futures", "#222222"),
-    ]:
-        value = meta.get(key)
-
-        if value is not None:
-            handles.append(
-                Line2D(
-                    [], [],
-                    color=color,
-                    linestyle="none"
-                )
-            )
-            legend_labels.append(
-                f"{name}: {float(value):,.0f}"
-            )
-
-    ax.axhline(0, color="gray", lw=0.8)
-    ax.set_title("Gamma Exposure by Strike")
-    ax.set_ylabel("TWD millions / 1% futures move")
-    ax.grid(axis="y", alpha=0.2)
-
-    ax.legend(
-        handles,
-        legend_labels,
-        fontsize=8,
-        loc="upper right"
-    )
-
-    # =============================================
-    # 2. Net GEX by Strike
-    # =============================================
-    ax = axes[1]
-
-    net = strikes["net_gex"].to_numpy(dtype=float) / scale
-
-    colors = np.where(
-        net >= 0,
-        "#c65a3a",
-        "#3274b8"
-    )
-
-    ax.bar(
-        x,
-        net,
-        width=width * 1.65,
-        color=colors
-    )
-
-    ax.axhline(0, color="gray", lw=0.8)
-
-    if ref is not None:
-        ax.axvline(
-            float(ref),
-            color="#222222",
-            ls="--",
-            lw=1.5
-        )
-
-    total = float(strikes["net_gex"].sum()) / scale
-
-    legend = [
-        Patch(
-            facecolor="#c65a3a",
-            label="Positive Net GEX"
-        ),
-        Patch(
-            facecolor="#3274b8",
-            label="Negative Net GEX"
-        ),
+    ax.bar(x-width/2, strikes['call_gex']/scale, width=width,
+           color='#c65a3a', label='Call absolute GEX')
+    ax.bar(x+width/2, -strikes['put_gex']/scale, width=width,
+           color='#3274b8', label='Put absolute GEX (displayed negative)')
+    labels = [
+        ('call_wall', 'Call Wall', '#c65a3a'),
+        ('put_wall', 'Put Wall', '#3274b8'),
+        ('reference_forward', 'Reference Futures', '#222222'),
     ]
+    handles, legend_labels = ax.get_legend_handles_labels()
+    for key, name, color in labels:
+        value = meta.get(key)
+        if value is not None:
+            handles.append(Line2D([], [], color=color, linestyle='none'))
+            legend_labels.append(f'{name}: {float(value):,.0f}')
+    ax.axhline(0, color='gray', lw=.8)
+    ax.set_title('Gamma Exposure by Strike')
+    ax.set_ylabel('TWD millions / 1% futures move')
+    ax.grid(axis='y', alpha=.2)
+    ax.legend(handles, legend_labels, fontsize=8, loc='upper right')
 
+    # 2) Net GEX at each strike. Signed GEX is computed in the engine.
+    ax = axes[1]
+    net = strikes['net_gex'].to_numpy(dtype=float) / scale
+    colors = np.where(net >= 0, '#c65a3a', '#3274b8')
+    ax.bar(x, net, width=width*1.65, color=colors)
+    ax.axhline(0, color='gray', lw=.8)
     if ref is not None:
-        legend.append(
-            Line2D(
-                [], [],
-                color="#222222",
-                ls="--",
-                label=f"Reference Futures: {float(ref):,.0f}"
-            )
-        )
+        ax.axvline(float(ref), color='#222222', ls='--', lw=1.5)
+    total = float(strikes['net_gex'].sum()) / scale
+    legend = [Patch(facecolor='#c65a3a', label='Positive Net GEX'),
+              Patch(facecolor='#3274b8', label='Negative Net GEX')]
+    if ref is not None:
+        legend.append(Line2D([], [], color='#222222', ls='--',
+                             label=f'Reference Futures: {float(ref):,.0f}'))
+    legend.append(Line2D([], [], color='none', label=f'Total Net GEX: {total:,.1f} M TWD'))
+    ax.legend(handles=legend, fontsize=8, loc='upper right')
+    ax.set_title('Net GEX by Strike')
+    ax.set_ylabel('Signed GEX (TWD millions / 1% move)')
+    ax.grid(axis='y', alpha=.2)
 
-    legend.append(
-        Line2D(
-            [], [],
-            color="none",
-            label=f"Total Net GEX: {total:,.1f} M TWD"
-        )
-    )
-
-    ax.legend(
-        handles=legend,
-        fontsize=8,
-        loc="upper right"
-    )
-
-    ax.set_title("Net GEX by Strike")
-    ax.set_ylabel(
-        "Signed GEX (TWD millions / 1% move)"
-    )
-    ax.grid(axis="y", alpha=0.2)
-
-    # =============================================
-    # 3. Repriced Gamma Profile / Gamma Flip
-    # =============================================
+    # 3) Repriced Gamma profile; keep reference/flip vertical lines.
     ax = axes[2]
-
-    for col, style in [
-        ("all", "-"),
-        ("ex_nearest", "--"),
-        ("ex_monthly", ":"),
-    ]:
+    for col, style in [('all', '-'), ('ex_nearest', '--'), ('ex_monthly', ':')]:
         if col in profile and profile[col].notna().any():
-            ax.plot(
-                profile["futures_price"],
-                profile[col] / scale,
-                ls=style,
-                label=col
-            )
-
-    ax.axhline(0, color="gray", lw=0.8)
-
+            ax.plot(profile['futures_price'], profile[col]/scale,
+                    ls=style, label=col)
+    ax.axhline(0, color='gray', lw=.8)
     if ref is not None:
-        ax.axvline(
-            float(ref),
-            color="black",
-            ls="--",
-            label=f"Reference Futures: {float(ref):,.0f}"
-        )
-
-    for i, flip in enumerate(meta.get("gamma_flips") or []):
-        ax.axvline(
-            float(flip),
-            color="green",
-            ls="-.",
-            label=(
-                f"Gamma Flip: {float(flip):,.0f}"
-                if i == 0 else None
-            )
-        )
-
-    ax.set_title(
-        "Repriced Gamma Profile / Zero Gamma"
-    )
-    ax.set_xlabel("Hypothetical futures price")
-    ax.set_ylabel(
-        "Signed GEX (TWD millions / 1% move)"
-    )
-    ax.grid(alpha=0.2)
-    ax.legend(fontsize=8, loc="best")
-
+        ax.axvline(float(ref), color='black', ls='--', label=f'Reference Futures: {float(ref):,.0f}')
+    for i, flip in enumerate(meta.get('gamma_flips') or []):
+        ax.axvline(float(flip), color='green', ls='-.',
+                   label=f'Gamma Flip: {float(flip):,.0f}' if i == 0 else None)
+    ax.set_title('Repriced Gamma Profile / Zero Gamma')
+    ax.set_xlabel('Hypothetical futures price')
+    ax.set_ylabel('Signed GEX (TWD millions / 1% move)')
+    ax.grid(alpha=.2)
+    ax.legend(fontsize=8, loc='best')
     return fig
