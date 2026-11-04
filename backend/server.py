@@ -227,6 +227,69 @@ def _combined_grouped_bars(axis, first, second, field, title, label1, label2=Non
 
 
 @app.post('/analyze')
+
+# Interactive data: preserves the original V4 calculation and PNG output.
+def _lf_rows(frame, columns):
+    clean = frame[columns].copy().replace([np.inf, -np.inf], np.nan)
+    clean = clean.astype(object).where(pd.notna(clean), None)
+    return clean.to_dict('records')
+
+def _lf_legacy_charts(mode, a=None, b=None, expiry=None, expiries=None, rng=.06, inst=None):
+    if mode == 'inst':
+        if inst is None or inst.empty:
+            return []
+        d = inst.copy()
+        d['date'] = pd.to_datetime(d['date']).dt.strftime('%Y-%m-%d')
+        metrics = [('OpenInterest(Net)', 'Net Open Interest'), ('Delta_OI', 'Change in Net OI'), ('TradingVolume(Net)', 'Net Trading Volume')]
+        charts = []
+        for cp in ['CALL', 'PUT']:
+            for field, label in metrics:
+                sub = d[d.CallPut.eq(cp)]
+                if field not in sub.columns:
+                    continue
+                sub = sub[['date','ItemEnglish',field]].rename(columns={'date':'x','ItemEnglish':'series',field:'value'})
+                charts.append({'title': f'{cp} · {label}', 'kind':'time', 'rows':_lf_rows(sub,['x','series','value'])})
+        return charts
+    frames = []
+    for tag, raw in [('Day',a), ('Night' if mode=='daynight' else 'Date 2',b)]:
+        if raw is None:
+            continue
+        d = v4.tidy(raw)
+        if expiry not in ('__COMBINED__','__ALL__',None):
+            if mode == 'cross' and expiries:
+                d = d[d.expiry.astype(str).isin(expiries)]
+            else:
+                d = d[d.expiry.astype(str).eq(str(expiry))]
+        elif mode == 'cross' and expiries:
+            d = d[d.expiry.astype(str).isin(expiries)]
+        if d.empty:
+            continue
+        f = pd.to_numeric(d.F,errors='coerce').median()
+        if pd.notna(f) and f>0:
+            d = d[d.strike.between(f*(1-rng),f*(1+rng))]
+        d = d.copy()
+        d['tag'] = tag
+        frames.append(d)
+    if not frames:
+        return []
+    data = pd.concat(frames,ignore_index=True)
+    charts=[]
+    for field,title in [('oi','Open Interest'),('volume','Traded Volume')]:
+        if field not in data.columns:
+            continue
+        sub=data.dropna(subset=['strike',field]).groupby(['strike','cp','tag'],as_index=False)[field].sum()
+        sub['series'] = sub['tag'].astype(str)+' · '+sub['cp'].astype(str)
+        sub=sub.rename(columns={'strike':'x',field:'value'})
+        charts.append({'title':title+' by Strike','kind':'strike','rows':_lf_rows(sub,['x','series','value'])})
+    if 'IV' in data.columns and 'moneyness' in data.columns:
+        sub=data.dropna(subset=['moneyness','IV']).copy()
+        sub=sub[sub.IV.between(0,500)]
+        sub['x']=(sub['moneyness']*100).round(1)
+        sub['series']=sub['tag'].astype(str)+' · '+sub['cp'].astype(str)
+        sub=sub.groupby(['x','series'],as_index=False).agg(value=('IV','median'))
+        charts.append({'title':'IV Smile by Moneyness (%)','kind':'line','rows':_lf_rows(sub,['x','series','value'])})
+    return charts
+
 def analyze(q: Query):
     with plot_lock:
         plt.close('all')
@@ -241,6 +304,7 @@ def analyze(q: Query):
                 df, errors = v4.institution_series(q.date1, calendar_days=q.lookback)
                 v4.institutional_charts(df)
                 meta = {'source_errors': errors, 'rows': len(df)}
+                interactive_charts = _lf_legacy_charts('inst', inst=df)
             elif q.mode == 'daynight':
                 if q.date2 is None:
                     raise ValueError('Night Data Label Date is required')
@@ -256,12 +320,13 @@ def analyze(q: Query):
 
             if q.expiry == '__COMBINED__' and q.mode in ('single', 'compare', 'daynight'):
                 meta = _combined_plot(q.mode, a, b if q.mode != 'single' else None, rng)
+                interactive_charts = _lf_legacy_charts(q.mode, a, b if q.mode != 'single' else None, q.expiry, rng=rng)
                 fig = plt.figure(plt.get_fignums()[-1])
                 out = io.BytesIO()
                 fig.savefig(out, format='png', dpi=130, bbox_inches='tight', facecolor='white')
                 img = base64.b64encode(out.getvalue()).decode('ascii')
                 return {'image': 'data:image/png;base64,' + img, 'meta': meta, 'mode': q.mode,
-                        'note': 'All expiries combined: OI/volume summed by strike; per-expiry IV smiles volume-weighted at fixed moneyness.'}
+                        'note': 'All expiries combined: OI/volume summed by strike; per-expiry IV smiles volume-weighted at fixed moneyness.', 'interactive_charts': interactive_charts}
 
             if all_mode:
                 # Only contracts present in BOTH datasets are compared.
@@ -291,7 +356,7 @@ def analyze(q: Query):
                         out = io.BytesIO()
                         fig.savefig(out, format='png', dpi=130, bbox_inches='tight', facecolor='white')
                         image = 'data:image/png;base64,' + base64.b64encode(out.getvalue()).decode('ascii')
-                        results.append({'expiry': exp, 'image': image, 'meta': exp_meta})
+                        results.append({'expiry': exp, 'image': image, 'meta': exp_meta, 'interactive_charts': _lf_legacy_charts(q.mode, a, b if q.mode != 'single' else None, exp, rng=rng)})
                     except Exception as exc:
                         logging.exception('Expiry %s failed', exp)
                         errors.append({'expiry': exp, 'error': str(exc)})
@@ -326,6 +391,7 @@ def analyze(q: Query):
             return {
                 'image': 'data:image/png;base64,' + img,
                 'meta': meta, 'mode': q.mode,
+                'interactive_charts': interactive_charts if q.mode == 'inst' else _lf_legacy_charts(q.mode, a, b if q.mode in ('compare','daynight') else None, q.expiry, q.expiries, rng),
                 'note': 'V4 Black-76 / TAIFEX. Charts are rendered from retrieved data, not demo values.'
             }
         except Exception as e:
@@ -869,6 +935,7 @@ def poc_analyze(q: PocQuery):
         return {
             'image': 'data:image/png;base64,' + base64.b64encode(output.getvalue()).decode('ascii'),
             'meta': {**summary, 'storage_key': storage_key},
+            'interactive_profile': _lf_rows(profile, ['price','volume','in_value_area','is_poc']),
             'note': 'TAIFEX tick trades; B+S / 2; POC-centered contiguous value area.',
             'csv': 'data:text/csv;base64,' + base64.b64encode(csv_bytes).decode('ascii'),
         }
