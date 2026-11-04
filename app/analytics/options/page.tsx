@@ -51,7 +51,14 @@ async function request(path:string,body:ReturnType<typeof payload>){
  try{
   const response=await fetch(apiBase()+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal});
   const json=await response.json();
-  if(!response.ok)throw new Error(typeof json.detail==='string'?json.detail:`HTTP ${response.status}`);
+  if(!response.ok){
+   const detail=json?.detail;
+   const explanation=typeof detail==='string'?detail:
+     Array.isArray(detail)?detail.map((item:{loc?:unknown[];msg?:string;type?:string})=>
+       `${Array.isArray(item.loc)?item.loc.join('.'):'request'}: ${item.msg||item.type||JSON.stringify(item)}`).join(' | '):
+     detail?JSON.stringify(detail):JSON.stringify(json);
+   throw new Error(`HTTP ${response.status} (${path}): ${explanation||response.statusText}`);
+  }
   return json;
  }finally{clearTimeout(timer);}
 }
