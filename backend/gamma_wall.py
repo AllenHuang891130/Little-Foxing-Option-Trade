@@ -326,24 +326,205 @@ def analyze_day_night(day, oi_day, selected_expiries=None, expiry_scope='combine
     return {'day':day_result,'night':night_result,
             'comparability_note':'Day and night use different as-of OI dates; changes cannot be attributed solely to IV/price.'}
 
+
 def draw(meta, strikes, profile):
-    fig, axes = plt.subplots(2,1,figsize=(15,11),constrained_layout=True)
-    ax=axes[0]
-    x=strikes.strike.to_numpy()
-    width=max(1.,np.median(np.diff(np.unique(x)))*.36) if len(np.unique(x))>1 else 25.
-    ax.bar(x-width/2,strikes.call_gex/1e6,width=width,color='#c65a3a',label='Call absolute GEX')
-    ax.bar(x+width/2,-strikes.put_gex/1e6,width=width,color='#3274b8',label='Put absolute GEX (displayed negative)')
-    for key,color in [('call_wall','#c65a3a'),('put_wall','#3274b8'),('reference_forward','#222222')]:
-        if meta[key] is not None:
-            ax.axvline(meta[key],color=color,ls='--',lw=1.5,label=f'{key}: {meta[key]:,.0f}')
-    ax.axhline(0,color='gray',lw=.8);ax.set_title('Gamma Exposure by Strike');ax.set_ylabel('TWD millions / 1% futures move');ax.grid(axis='y',alpha=.2);ax.legend(fontsize=8)
-    ax=axes[1]
-    for col,style in [('all','-'),('ex_nearest','--'),('ex_monthly',':')]:
-        if profile[col].notna().any():
-            ax.plot(profile.futures_price,profile[col]/1e6,ls=style,label=col)
-    ax.axhline(0,color='gray',lw=.8)
-    ax.axvline(meta['reference_forward'],color='black',ls='--',label='Reference futures')
-    for i,flip in enumerate(meta['gamma_flips']):
-        ax.axvline(flip,color='green',ls='-.',label='Gamma Flip' if i==0 else None)
-    ax.set_title('Repriced Gamma Profile / Zero Gamma');ax.set_xlabel('Hypothetical futures price');ax.set_ylabel('Signed GEX (TWD millions / 1% move)');ax.grid(alpha=.2);ax.legend(fontsize=8)
+    """Three panels: Call/Put GEX, Net GEX, Gamma Profile."""
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    fig, axes = plt.subplots(
+        3, 1,
+        figsize=(15, 15),
+        constrained_layout=True
+    )
+
+    strikes = strikes.sort_values("strike")
+    x = strikes["strike"].to_numpy(dtype=float)
+
+    gaps = np.diff(np.unique(x))
+    width = (
+        max(1.0, float(np.median(gaps)) * 0.36)
+        if len(gaps) else 25.0
+    )
+
+    scale = 1e6
+    ref = meta.get("reference_forward")
+
+    # =============================================
+    # 1. Call / Put Absolute GEX
+    # No vertical dashed lines
+    # =============================================
+    ax = axes[0]
+
+    ax.bar(
+        x - width / 2,
+        strikes["call_gex"] / scale,
+        width=width,
+        color="#c65a3a",
+        label="Call absolute GEX"
+    )
+
+    ax.bar(
+        x + width / 2,
+        -strikes["put_gex"] / scale,
+        width=width,
+        color="#3274b8",
+        label="Put absolute GEX (displayed negative)"
+    )
+
+    handles, legend_labels = ax.get_legend_handles_labels()
+
+    for key, name, color in [
+        ("call_wall", "Call Wall", "#c65a3a"),
+        ("put_wall", "Put Wall", "#3274b8"),
+        ("reference_forward", "Reference Futures", "#222222"),
+    ]:
+        value = meta.get(key)
+
+        if value is not None:
+            handles.append(
+                Line2D(
+                    [], [],
+                    color=color,
+                    linestyle="none"
+                )
+            )
+            legend_labels.append(
+                f"{name}: {float(value):,.0f}"
+            )
+
+    ax.axhline(0, color="gray", lw=0.8)
+    ax.set_title("Gamma Exposure by Strike")
+    ax.set_ylabel("TWD millions / 1% futures move")
+    ax.grid(axis="y", alpha=0.2)
+
+    ax.legend(
+        handles,
+        legend_labels,
+        fontsize=8,
+        loc="upper right"
+    )
+
+    # =============================================
+    # 2. Net GEX by Strike
+    # =============================================
+    ax = axes[1]
+
+    net = strikes["net_gex"].to_numpy(dtype=float) / scale
+
+    colors = np.where(
+        net >= 0,
+        "#c65a3a",
+        "#3274b8"
+    )
+
+    ax.bar(
+        x,
+        net,
+        width=width * 1.65,
+        color=colors
+    )
+
+    ax.axhline(0, color="gray", lw=0.8)
+
+    if ref is not None:
+        ax.axvline(
+            float(ref),
+            color="#222222",
+            ls="--",
+            lw=1.5
+        )
+
+    total = float(strikes["net_gex"].sum()) / scale
+
+    legend = [
+        Patch(
+            facecolor="#c65a3a",
+            label="Positive Net GEX"
+        ),
+        Patch(
+            facecolor="#3274b8",
+            label="Negative Net GEX"
+        ),
+    ]
+
+    if ref is not None:
+        legend.append(
+            Line2D(
+                [], [],
+                color="#222222",
+                ls="--",
+                label=f"Reference Futures: {float(ref):,.0f}"
+            )
+        )
+
+    legend.append(
+        Line2D(
+            [], [],
+            color="none",
+            label=f"Total Net GEX: {total:,.1f} M TWD"
+        )
+    )
+
+    ax.legend(
+        handles=legend,
+        fontsize=8,
+        loc="upper right"
+    )
+
+    ax.set_title("Net GEX by Strike")
+    ax.set_ylabel(
+        "Signed GEX (TWD millions / 1% move)"
+    )
+    ax.grid(axis="y", alpha=0.2)
+
+    # =============================================
+    # 3. Repriced Gamma Profile / Gamma Flip
+    # =============================================
+    ax = axes[2]
+
+    for col, style in [
+        ("all", "-"),
+        ("ex_nearest", "--"),
+        ("ex_monthly", ":"),
+    ]:
+        if col in profile and profile[col].notna().any():
+            ax.plot(
+                profile["futures_price"],
+                profile[col] / scale,
+                ls=style,
+                label=col
+            )
+
+    ax.axhline(0, color="gray", lw=0.8)
+
+    if ref is not None:
+        ax.axvline(
+            float(ref),
+            color="black",
+            ls="--",
+            label=f"Reference Futures: {float(ref):,.0f}"
+        )
+
+    for i, flip in enumerate(meta.get("gamma_flips") or []):
+        ax.axvline(
+            float(flip),
+            color="green",
+            ls="-.",
+            label=(
+                f"Gamma Flip: {float(flip):,.0f}"
+                if i == 0 else None
+            )
+        )
+
+    ax.set_title(
+        "Repriced Gamma Profile / Zero Gamma"
+    )
+    ax.set_xlabel("Hypothetical futures price")
+    ax.set_ylabel(
+        "Signed GEX (TWD millions / 1% move)"
+    )
+    ax.grid(alpha=0.2)
+    ax.legend(fontsize=8, loc="best")
+
     return fig
