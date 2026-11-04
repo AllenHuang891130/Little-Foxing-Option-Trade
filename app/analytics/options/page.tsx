@@ -10,8 +10,11 @@ const modes:{id:Mode;label:string}[]=[
  {id:'cross',label:'Cross Expiry'}, {id:'inst',label:'Institutions'},
  {id:'daynight',label:'Day vs Night'}, {id:'poc',label:'MTX Volume Profile'}, {id:'gamma',label:'Gamma Wall'}
 ];
-type ExpiryChart={expiry:string;image:string;meta:Record<string,unknown>;activity?:Record<string,unknown>[]};
-type Result={image:string;gamma_groups?:GammaGroup[];images?:ExpiryChart[];meta:Record<string,unknown>;note:string;csv?:string;activity?:Record<string,unknown>[]};
+type LegacyRow={x:string|number;series:string;value:number};
+type LegacyChart={title:string;kind:string;rows:LegacyRow[]};
+type ProfileRow={price:number;volume:number;in_value_area:boolean;is_poc:boolean};
+type ExpiryChart={expiry:string;image:string;meta:Record<string,unknown>;activity?:Record<string,unknown>[];interactive_charts?:LegacyChart[]};
+type Result={interactive_charts?:LegacyChart[];interactive_profile?:ProfileRow[];image:string;gamma_groups?:GammaGroup[];images?:ExpiryChart[];meta:Record<string,unknown>;note:string;csv?:string;activity?:Record<string,unknown>[]};
 type Settings={date1:string;date2:string;expiry:string;expiryOptions:string[];selectedExpiries:string[];atmRange:string;lookback:string;force:boolean;pocSession:string;pocValueArea:string;pocStep:string;pocTopN:string;gammaSession:string;gammaPosition:string;gammaIv:string;gammaRange:string;gamma0Dte:string};
 type Workspace={settings:Settings;busy:boolean;message:string;result:Result|null;resultSignature:string|null};
 type Workspaces=Record<Mode,Workspace>;
@@ -205,6 +208,81 @@ function GammaInteractive({group}:{group:GammaGroup}) {
  </section>;
 }
 
+
+// Shared SVG terminal interaction for OI, institutional series and MTX profile.
+const palette=['#c65a3a','#3274b8','#40966a','#a66bc5','#d6a54b','#6c8eaa','#ba6684','#808080'];
+function TerminalChart({chart}:{chart:LegacyChart}){
+ const [hover,setHover]=useState<string|null>(null);
+ const [locked,setLocked]=useState<string|null>(null);
+ const [start,setStart]=useState(0);
+ const [windowSize,setWindowSize]=useState(60);
+ const [hidden,setHidden]=useState<string[]>([]);
+ const labels=Array.from(new Set(chart.rows.map(r=>String(r.x)))).sort((a,b)=>chart.kind==='time'?a.localeCompare(b):Number(a)-Number(b));
+ const series=Array.from(new Set(chart.rows.map(r=>r.series)));
+ const visible=labels.slice(start,start+windowSize);
+ const active=locked??hover;
+ const rows=chart.rows.filter(r=>visible.includes(String(r.x))&&!hidden.includes(r.series));
+ const maxValue=Math.max(1,...rows.map(r=>Math.abs(Number(r.value)||0)));
+ const minValue=chart.kind==='line'?Math.min(0,...rows.map(r=>Number(r.value)||0)):-maxValue;
+ const maxY=chart.kind==='line'?Math.max(1,...rows.map(r=>Number(r.value)||0)):maxValue;
+ const w=980,h=330,l=76,t=24,r=22,b=56;
+ const px=(idx:number)=>l+(idx+.5)*(w-l-r)/Math.max(visible.length,1);
+ const py=(v:number)=>t+(maxY-v)/(maxY-minValue||1)*(h-t-b);
+ const y0=py(0);
+ const activeIdx=visible.indexOf(active??'');
+ const grouped=new Map<string,Map<string,number>>();
+ for(const row of rows){const k=String(row.x);if(!grouped.has(k))grouped.set(k,new Map());grouped.get(k)!.set(row.series,Number(row.value)||0);}
+ const values=active?series.map(s=>({name:s,value:grouped.get(active)?.get(s)})).filter(v=>v.value!==undefined):[];
+ const move=(event:React.MouseEvent<SVGSVGElement>)=>{
+  if(locked||!visible.length)return;
+  const rect=event.currentTarget.getBoundingClientRect();
+  const svgX=(event.clientX-rect.left)/rect.width*w;
+  const i=Math.max(0,Math.min(visible.length-1,Math.floor((svgX-l)/(w-l-r)*visible.length)));
+  setHover(visible[i]);
+ };
+ const width=Math.min(22,Math.max(1.4,(w-l-r)/Math.max(visible.length,1)/Math.max(1,series.length+0.4)));
+ const visibleSeries=series.filter(s=>!hidden.includes(s));
+ return <section style={{marginBottom:28,border:'1px solid var(--border, #dddddd44)',borderRadius:12,padding:12}}>
+  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+   <strong>{chart.title}</strong>
+   <div style={{display:'flex',gap:6}}><button type="button" onClick={()=>{setStart(0);setWindowSize(60);setLocked(null);}}>Reset</button><button type="button" onClick={()=>setWindowSize(v=>Math.max(8,Math.floor(v/1.5)))}>Zoom +</button><button type="button" onClick={()=>setWindowSize(v=>Math.min(labels.length,Math.ceil(v*1.5)))}>Zoom −</button></div>
+  </div>
+  <div style={{display:'flex',flexWrap:'wrap',gap:10,margin:'8px 0'}}>{series.map((s,i)=><label key={s} style={{fontSize:12,cursor:'pointer',opacity:hidden.includes(s)?.4:1}}><input type="checkbox" checked={!hidden.includes(s)} onChange={()=>setHidden(v=>v.includes(s)?v.filter(x=>x!==s):[...v,s])}/><span style={{color:palette[i%palette.length]}}>■</span> {s}</label>)}</div>
+  <div tabIndex={0} onKeyDown={e=>{if(e.key==='Escape')setLocked(null);if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();const i=visible.indexOf(active??'');setLocked(visible[Math.max(0,Math.min(visible.length-1,(i<0?0:i)+(e.key==='ArrowRight'?1:-1)))])}}} style={{outline:'none'}}>
+   <svg viewBox={`0 0 ${w} ${h}`} style={{width:'100%',display:'block',touchAction:'pan-y'}} onMouseMove={move} onMouseLeave={()=>setHover(null)} onClick={()=>setLocked(locked?null:hover)} role="img" aria-label={chart.title}>
+    {[0,.25,.5,.75,1].map(f=><g key={f}><line x1={l} x2={w-r} y1={t+f*(h-t-b)} y2={t+f*(h-t-b)} stroke="currentColor" opacity=".12"/><text x={l-8} y={t+f*(h-t-b)+4} textAnchor="end" fontSize="11" fill="currentColor">{fmt(maxY-f*(maxY-minValue),1)}</text></g>)}
+    <line x1={l} x2={w-r} y1={y0} y2={y0} stroke="currentColor" opacity=".5"/>
+    {chart.kind==='line'?visibleSeries.map((s,i)=>{const pts=visible.map((x,j)=>{const v=grouped.get(x)?.get(s);return v===undefined?null:`${px(j)},${py(v)}`}).filter(Boolean).join(' ');return <polyline key={s} points={pts} fill="none" stroke={palette[series.indexOf(s)%palette.length]} strokeWidth="2"/>}):visible.flatMap((x,i)=>visibleSeries.map((s,j)=>{const v=grouped.get(x)?.get(s);if(v===undefined)return null;const xPos=px(i)+(j-(visibleSeries.length-1)/2)*width;return <rect key={`${x}-${s}`} x={xPos-width*.45} y={Math.min(py(v),y0)} width={width*.9} height={Math.max(1,Math.abs(py(v)-y0))} fill={palette[series.indexOf(s)%palette.length]} opacity=".88"/>}))}
+    {visible.map((x,i)=>i%Math.max(1,Math.ceil(visible.length/14))===0?<text key={x} x={px(i)} y={h-25} fontSize="10" fill="currentColor" textAnchor="middle">{x}</text>:null)}
+    {activeIdx>=0&&<><line x1={px(activeIdx)} x2={px(activeIdx)} y1={t} y2={h-b} stroke="currentColor" strokeDasharray="4 4" opacity=".65"/><text x={px(activeIdx)} y={h-7} fontSize="12" textAnchor="middle" fill="currentColor">{active}</text></>}
+   </svg>
+  </div>
+  {active&&<div style={{padding:'8px 12px',background:'var(--surface-secondary, #88888814)',borderRadius:8,fontSize:12,display:'flex',gap:14,flexWrap:'wrap'}}><strong>{active}{locked?' · Locked':''}</strong>{values.map(v=><span key={v.name}>{v.name}: <b>{fmt(v.value!,2)}</b></span>)}<span style={{opacity:.6}}>Click to lock · ← → to step · Esc to unlock</span></div>}
+  <div style={{display:'flex',gap:10,alignItems:'center',fontSize:12}}><span>Range</span><input aria-label="Scroll chart" type="range" min={0} max={Math.max(0,labels.length-windowSize)} value={Math.min(start,Math.max(0,labels.length-windowSize))} onChange={e=>setStart(Number(e.target.value))} style={{flex:1}}/><span>{Math.min(start+1,labels.length)}–{Math.min(start+windowSize,labels.length)} / {labels.length}</span></div>
+ </section>;
+}
+function ProfileInteractive({rows,meta}:{rows:ProfileRow[];meta:Record<string,unknown>}){
+ const [hover,setHover]=useState<number|null>(null);
+ const [locked,setLocked]=useState<number|null>(null);
+ const [range,setRange]=useState(90);
+ const [offset,setOffset]=useState(0);
+ const data=rows.filter(r=>r.volume>0||r.in_value_area);
+ const visible=data.slice(offset,offset+range);
+ const w=980,h=420,l=90,r=100,t=18,b=38;
+ const vmax=Math.max(1,...visible.map(r=>r.volume));
+ const step=(h-t-b)/Math.max(1,visible.length);
+ const selected=locked??hover;
+ const active=data.find(r=>r.price===selected);
+ return <section style={{border:'1px solid var(--border, #dddddd44)',borderRadius:12,padding:12}}>
+  <strong>MTX Horizontal Volume Profile</strong><div style={{fontSize:12,marginTop:5}}>POC {fmt(Number(meta.poc))} · VAH {fmt(Number(meta.vah))} · VAL {fmt(Number(meta.val))} · Tick Volume (B+S / 2)</div>
+  <svg viewBox={`0 0 ${w} ${h}`} style={{width:'100%',display:'block'}} onMouseLeave={()=>setHover(null)} onClick={()=>setLocked(locked?null:hover)} role="img" aria-label="Interactive MTX volume profile">
+   {visible.map((v,i)=>{const y=t+(visible.length-i-1)*step;return <g key={v.price} onMouseEnter={()=>setHover(v.price)}><rect x={l} y={y} height={Math.max(1,step*.92)} width={Math.max(1,v.volume/vmax*(w-l-r))} fill={v.is_poc?'#c65a3a':v.in_value_area?'#3274b8':'#9da3ad'} opacity={selected===v.price?1:.82}/>{(i%Math.max(1,Math.ceil(visible.length/15))===0||v.is_poc)&&<text x={l-6} y={y+step*.7} fontSize="10" textAnchor="end" fill="currentColor">{fmt(v.price)}</text>}</g>})}
+  </svg>
+  {active&&<div style={{fontSize:12,padding:10,background:'var(--surface-secondary, #88888814)'}}>Price <b>{fmt(active.price)}</b> · Volume <b>{fmt(active.volume)}</b> · {active.is_poc?'POC':active.in_value_area?'Inside Value Area':'Outside Value Area'} {locked?'· Locked':''}</div>}
+  <div style={{display:'flex',gap:8,alignItems:'center'}}><button type="button" onClick={()=>setRange(v=>Math.max(15,Math.floor(v/1.5)))}>Zoom +</button><button type="button" onClick={()=>setRange(v=>Math.min(data.length,Math.ceil(v*1.5)))}>Zoom −</button><button type="button" onClick={()=>{setRange(90);setOffset(0);setLocked(null)}}>Reset</button><input aria-label="Scroll price levels" type="range" style={{flex:1}} min={0} max={Math.max(0,data.length-range)} value={Math.min(offset,Math.max(0,data.length-range))} onChange={e=>setOffset(Number(e.target.value))}/></div>
+ </section>;
+}
+
 export default function Options(){
  const [mode,setMode]=useState<Mode>('daynight');
  const [workspaces,setWorkspaces]=useState<Workspaces>(initialWorkspaces);
@@ -281,7 +359,8 @@ export default function Options(){
   <div className="panel"><div className="sectiontitle"><h2>{modes.find(m=>m.id===mode)?.label} Analysis</h2><span>{busy?'Working...':stale?'Previous Result':result?'V4 results':'Waiting for analysis'}</span></div>
    {stale&&<div className="notice" role="status"><Info size={15} style={{verticalAlign:'middle',marginRight:7}}/>Settings have changed. The chart below is from the previous successful analysis. Run Analysis to update it.</div>}
    {result?<>
-    {mode==='gamma'&&result.gamma_groups?.length?result.gamma_groups.map(group=><GammaInteractive key={group.expiry} group={group}/>):result.images?.length?result.images.map(chart=><section key={chart.expiry} style={{marginBottom:32}}><h3 style={{marginBottom:12}}>Expiry: {chart.expiry}</h3><img className="analysis-image" src={chart.image} alt={`TAIFEX V4 analytics for ${chart.expiry}`}/>{mode==='gamma'&&chart.activity&&<details><summary>Gamma-weighted Volume Activity</summary><pre className="result-meta">{JSON.stringify(chart.activity,null,2)}</pre></details>}{Object.keys(chart.meta||{}).length>0&&<pre className="result-meta">{JSON.stringify(chart.meta,null,2)}</pre>}</section>):<img className="analysis-image" src={result.image} alt="TAIFEX V4 option analytics charts"/>}
+    {mode==='gamma'&&result.gamma_groups?.length?result.gamma_groups.map(group=><GammaInteractive key={group.expiry} group={group}/>):mode==='poc'&&result.interactive_profile?.length?<ProfileInteractive rows={result.interactive_profile} meta={result.meta}/>:result.images?.length?result.images.map(chart=><section key={chart.expiry} style={{marginBottom:32}}><h3>Expiry: {chart.expiry}</h3>{chart.interactive_charts?.length?chart.interactive_charts.map((c,i)=><TerminalChart key={`${chart.expiry}-${i}`} chart={c}/>):<img className="analysis-image" src={chart.image} alt={`V4 ${chart.expiry}`}/>}</section>):result.interactive_charts?.length?result.interactive_charts.map((c,i)=><TerminalChart key={i} chart={c}/>):<img className="analysis-image" src={result.image} alt="TAIFEX V4 analytics charts"/>}
+    {mode!=='gamma'&&(result.interactive_charts?.length||result.interactive_profile?.length||result.images?.some(c=>c.interactive_charts?.length))?<details style={{marginTop:12}}><summary>Original V4 static charts (reference)</summary>{result.images?.length?result.images.map(c=><img key={c.expiry} className="analysis-image" src={c.image} alt={c.expiry}/>):<img className="analysis-image" src={result.image} alt="Original V4 chart"/>}</details>:null}
     {mode==='gamma'&&result.activity&&<details><summary>Gamma-weighted Volume Activity (not dealer GEX)</summary><pre className="result-meta">{JSON.stringify(result.activity,null,2)}</pre></details>}
      {mode==='poc'&&result.csv&&<p><a className="analysis-button" href={result.csv} download={`LF_MTX_VP_${s.date1}_${String(result.meta?.expiry||'AUTO')}_${s.pocSession}.csv`}>Download Profile CSV</a></p>}
     {Object.keys(result.meta||{}).length>0&&<pre className="result-meta">{JSON.stringify(result.meta,null,2)}</pre>}
