@@ -211,7 +211,7 @@ function GammaInteractive({group}:{group:GammaGroup}) {
   <label style={{fontSize:12}}>Profile<select value={profileMode} onChange={e=>setProfileMode(e.target.value as typeof profileMode)}><option value="all">All</option><option value="ex_nearest">Excluding nearest</option><option value="ex_monthly">Excluding nearest monthly</option></select></label>
   {profileChart}
   <div style={{fontSize:12,marginTop:8}}>{allSessions.map(([key,s])=><div key={key}>{key.toUpperCase()} · Gamma Flip: {(Array.isArray(s.meta.gamma_flips)?s.meta.gamma_flips:[]).map(v=>fmt(Number(v))).join(', ')||'None'} · Net GEX: {million(num(s.meta.net_gex_twd_per_1pct)??0)} · Weight: {String(s.meta.oi_source??'—')}</div>)}</div>
-  <details style={{marginTop:12}}><summary>Raw Gamma Data / Static PNG</summary>{allSessions.map(([key,s])=><div key={key}><h4>{key.toUpperCase()}</h4><img className="analysis-image" src={s.image} alt={`${key} static Gamma Wall`}/><pre className="result-meta">{JSON.stringify(s.meta,null,2)}</pre></div>)}</details>
+  <details style={{marginTop:12}}><summary>Raw Gamma Data / Metadata</summary>{allSessions.map(([key,s])=><div key={key}><h4>{key.toUpperCase()}</h4><pre className="result-meta">{JSON.stringify(s.meta,null,2)}</pre></div>)}</details>
  </section>;
 }
 
@@ -293,6 +293,15 @@ function ProfileInteractive({rows,meta}:{rows:ProfileRow[];meta:Record<string,un
  </section>;
 }
 
+function sortCharts(charts:LegacyChart[],mode:Mode):LegacyChart[]{
+ if(mode!=='inst')return charts;
+ const metrics=['Net Open Interest','Change in Net OI','Net Trading Volume'];
+ return [...charts].sort((a,b)=>{
+  const metric=(title:string)=>{const i=metrics.findIndex(m=>title.includes(m));return i<0?99:i;};
+  return metric(a.title)-metric(b.title)||Number(a.title.startsWith('PUT'))-Number(b.title.startsWith('PUT'));
+ });
+}
+
 export default function Options(){
  const [mode,setMode]=useState<Mode>('daynight');
  const [workspaces,setWorkspaces]=useState<Workspaces>(initialWorkspaces);
@@ -370,8 +379,27 @@ export default function Options(){
    {stale&&<div className="notice" role="status"><Info size={15} style={{verticalAlign:'middle',marginRight:7}}/>Settings have changed. The chart below is from the previous successful analysis. Run Analysis to update it.</div>}
    {result?<>
     <style>{`.lf-interactive-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}@media(max-width:850px){.lf-interactive-grid{grid-template-columns:1fr}}`}</style>
-    {mode==='gamma'&&result.gamma_groups?.length?result.gamma_groups.map(group=><GammaInteractive key={group.expiry} group={group}/>):mode==='poc'&&result.interactive_profile?.length?<ProfileInteractive rows={result.interactive_profile} meta={result.meta}/>:result.images?.length?result.images.map(chart=><section key={chart.expiry} style={{marginBottom:32}}><h3>Expiry: {chart.expiry}</h3>{chart.interactive_charts?.length?<div className="lf-interactive-grid">{chart.interactive_charts.map((c,i)=><TerminalChart key={`${chart.expiry}-${i}`} chart={c}/>)}</div>:<img className="analysis-image" src={chart.image} alt={`V4 ${chart.expiry}`}/>}</section>):result.interactive_charts?.length?<div className="lf-interactive-grid">{result.interactive_charts.map((c,i)=><TerminalChart key={i} chart={c}/>)}</div>:<img className="analysis-image" src={result.image} alt="TAIFEX V4 analytics charts"/>}
-    {mode!=='gamma'&&(result.interactive_charts?.length||result.interactive_profile?.length||result.images?.some(c=>c.interactive_charts?.length))?<details style={{marginTop:12}}><summary>Original V4 static charts (reference)</summary>{result.images?.length?result.images.map(c=><img key={c.expiry} className="analysis-image" src={c.image} alt={c.expiry}/>):<img className="analysis-image" src={result.image} alt="Original V4 chart"/>}</details>:null}
+    {/* The original static charts are the primary result in every mode. */}
+    {mode==='gamma'&&result.gamma_groups?.length?
+      result.gamma_groups.map(group=><section key={group.expiry} style={{marginBottom:32}}>
+        <h3>{group.expiry} · Original Gamma Wall</h3>
+        {(['day','night'] as const).map(session=>group.sessions[session]?.image?
+          <div key={session}><h4>{session.toUpperCase()}</h4><img className="analysis-image" src={group.sessions[session]!.image} alt={`${group.expiry} ${session} Gamma Wall`}/></div>:null)}
+        <details style={{marginTop:12}}><summary>Open interactive Gamma Wall</summary><GammaInteractive group={group}/></details>
+      </section>):
+      result.images?.length?result.images.map(chart=><section key={chart.expiry} style={{marginBottom:32}}>
+        <h3>Expiry: {chart.expiry}</h3>
+        <img className="analysis-image" src={chart.image} alt={`Original V4 ${chart.expiry}`}/>
+        {chart.interactive_charts?.length?<details style={{marginTop:12}}><summary>Open interactive charts</summary>
+          <div className="lf-interactive-grid">{sortCharts(chart.interactive_charts,mode).map((c,i)=><TerminalChart key={`${chart.expiry}-${i}`} chart={c}/>)}</div>
+        </details>:null}
+      </section>):<>
+        {result.image&&<img className="analysis-image" src={result.image} alt="Original TAIFEX V4 analytics chart"/>}
+        {mode==='poc'&&result.interactive_profile?.length?<details style={{marginTop:12}}><summary>Open interactive MTX Volume Profile</summary><ProfileInteractive rows={result.interactive_profile} meta={result.meta}/></details>:null}
+        {result.interactive_charts?.length?<details style={{marginTop:12}}><summary>Open interactive charts</summary>
+          <div className="lf-interactive-grid">{sortCharts(result.interactive_charts,mode).map((c,i)=><TerminalChart key={i} chart={c}/>)}</div>
+        </details>:null}
+      </>}
     {mode==='gamma'&&result.activity&&<details><summary>Gamma-weighted Volume Activity (not dealer GEX)</summary><pre className="result-meta">{JSON.stringify(result.activity,null,2)}</pre></details>}
      {mode==='poc'&&result.csv&&<p><a className="analysis-button" href={result.csv} download={`LF_MTX_VP_${s.date1}_${String(result.meta?.expiry||'AUTO')}_${s.pocSession}.csv`}>Download Profile CSV</a></p>}
     {Object.keys(result.meta||{}).length>0&&<pre className="result-meta">{JSON.stringify(result.meta,null,2)}</pre>}
