@@ -874,3 +874,109 @@ def poc_analyze(q: PocQuery):
     except Exception as exc:
         logging.exception('POC analysis failed')
         raise HTTPException(422, str(exc)) from exc
+
+# ============================================================
+# GAMMA WALL — independent seventh analysis mode
+# ============================================================
+import gamma_wall as gamma
+
+class GammaQuery(BaseModel):
+    date1: date
+    date2: date | None = None  # TAIFEX night data label date
+    session: Literal['day', 'night', 'daynight'] = 'day'
+    expiry: str = '__COMBINED__'
+    oi_day: date | None = None  # Last *published* OI as of night snapshot
+    position_mode: Literal['call_positive','call_negative','all_long','all_short'] = 'call_positive'
+    iv_mode: Literal['individual','atm'] = 'individual'
+    profile_range_pct: float = Field(default=10, ge=1, le=30)
+    include_0dte: bool | None = None
+    force: bool = False
+
+
+def _gamma_selection(expiry: str):
+    if expiry in ('__ALL__', '__COMBINED__'):
+        return 'all', None
+    return 'single', [expiry]
+
+
+def _gamma_render(result):
+    meta, strikes, profile, activity = result
+    fig = gamma.draw(meta, strikes, profile)
+    try:
+        out = io.BytesIO()
+        fig.savefig(out, format='png', dpi=115, bbox_inches='tight', facecolor='white')
+        image = 'data:image/png;base64,' + base64.b64encode(out.getvalue()).decode('ascii')
+    finally:
+        plt.close(fig)
+    # Keep payload manageable: strike/activity tables, not the full 201-point profile.
+    activity_rows = activity.replace([np.inf,-np.inf],np.nan).where(pd.notna(activity),None).to_dict('records')
+    return {'image':image, 'meta':meta, 'activity':activity_rows}
+
+
+@app.post('/gamma/expiries')
+def gamma_expiries(q: GammaQuery):
+    try:
+        ds = fmt(q.date2 if q.session == 'night' and q.date2 else q.date1)
+        if q.session == 'night':
+            a = v4.load_market_session(ds, 'night', q.force)
+        else:
+            a = v4.load_market_session(fmt(q.date1), 'day', q.force)
+        options = set(a.expiry.dropna().astype(str).str.strip())
+        if q.session == 'daynight':
+            if q.date2 is None: raise ValueError('Night data label date is required')
+            b = v4.load_market_session(fmt(q.date2), 'night', q.force)
+            options &= set(b.expiry.dropna().astype(str).str.strip())
+        return {'expiries': sorted(options), 'rows':len(a)}
+    except Exception as exc:
+        logging.exception('Gamma expiry loading failed')
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post('/gamma/analyze')
+def gamma_analyze(q: GammaQuery):
+    try:
+        if q.session in ('night','daynight') and q.oi_day is None:
+            raise ValueError('Night Gamma requires OI Snapshot Date (latest officially published day OI)')
+        if q.session in ('night','daynight') and q.date2 is None:
+            raise ValueError('Night Data Label Date is required')
+        scope, selected = _gamma_selection(q.expiry)
+        dates = [('day', q.date1)] if q.session=='day' else (
+            [('night',q.date2)] if q.session=='night' else
+            [('day',q.date1),('night',q.date2)])
+        results=[]; failures=[]
+        with plot_lock:
+            for sess,dt in dates:
+                if q.expiry == '__ALL__':
+                    options = sorted(v4.load_market_session(fmt(dt), sess, q.force).expiry.dropna().astype(str).str.strip().unique().tolist())
+                    if q.session=='daynight':
+                        other_sess,other_dt = dates[1] if sess=='day' else dates[0]
+                        options = sorted(set(options) & set(v4.load_market_session(fmt(other_dt), other_sess, q.force).expiry.dropna().astype(str).str.strip().unique().tolist()))
+                    if not options: raise ValueError('No common contracts for selected sessions')
+                    for exp in options:
+                        try:
+                            r = gamma.analyze_session(dt,session=sess,expiry_scope='single',selected_expiries=[exp],
+                                oi_day=q.oi_day if sess=='night' else None,position_mode=q.position_mode,
+                                iv_mode=q.iv_mode,profile_range_pct=q.profile_range_pct,
+                                include_0dte=q.include_0dte,force=q.force)
+                            results.append({'expiry':f'{sess.upper()} · {exp}',**_gamma_render(r)})
+                        except Exception as exc:
+                            failures.append({'session':sess,'expiry':exp,'error':str(exc)})
+                else:
+                    r = gamma.analyze_session(dt,session=sess,expiry_scope=scope,selected_expiries=selected,
+                        oi_day=q.oi_day if sess=='night' else None,position_mode=q.position_mode,
+                        iv_mode=q.iv_mode,profile_range_pct=q.profile_range_pct,
+                        include_0dte=q.include_0dte,force=q.force)
+                    results.append({'expiry':sess.upper() if q.session=='daynight' else q.expiry,**_gamma_render(r)})
+        if not results:
+            raise ValueError('No Gamma charts generated: '+str(failures[:5]))
+        note = ('Dealer sign assumptions are hypothetical. Night uses an explicitly dated official OI snapshot; '
+                'Gamma-weighted volume is activity, NOT dealer positioning. Day/Night comparisons may differ in OI vintage.')
+        if len(results)==1:
+            return {'image':results[0]['image'],'meta':results[0]['meta'],
+                    'activity':results[0]['activity'],'note':note}
+        return {'image':results[0]['image'],
+                'images':[{'expiry':r['expiry'],'image':r['image'],'meta':r['meta'],'activity':r['activity']} for r in results],
+                'meta':{'completed':len(results),'failed':failures},'note':note}
+    except Exception as exc:
+        logging.exception('Gamma analysis failed')
+        raise HTTPException(422,str(exc)) from exc
