@@ -226,8 +226,6 @@ def _combined_grouped_bars(axis, first, second, field, title, label1, label2=Non
     axis.grid(axis='y', alpha=.2)
 
 
-@app.post('/analyze')
-
 # Interactive data: preserves the original V4 calculation and PNG output.
 def _lf_rows(frame, columns):
     clean = frame[columns].copy().replace([np.inf, -np.inf], np.nan)
@@ -290,6 +288,7 @@ def _lf_legacy_charts(mode, a=None, b=None, expiry=None, expiries=None, rng=.06,
         charts.append({'title':'IV Smile by Moneyness (%)','kind':'line','rows':_lf_rows(sub,['x','series','value'])})
     return charts
 
+@app.post('/analyze')
 def analyze(q: Query):
     with plot_lock:
         plt.close('all')
