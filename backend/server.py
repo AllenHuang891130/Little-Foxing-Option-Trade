@@ -272,7 +272,20 @@ def _lf_legacy_charts(mode, a=None, b=None, expiry=None, expiries=None, rng=.06,
         return []
     data = pd.concat(frames,ignore_index=True)
     charts=[]
+    if mode == 'compare':
+        # Match original V4: same-strike / same Call-Put intersection, D2 minus D1.
+        # No unmatched strike is interpreted as zero.
+        first = data[data['tag'].eq('Day')].groupby(['strike','cp'])['oi'].sum().rename('oi1')
+        second = data[data['tag'].eq('Date 2')].groupby(['strike','cp'])['oi'].sum().rename('oi2')
+        change = first.to_frame().join(second, how='inner').reset_index()
+        change['value'] = change['oi2'] - change['oi1']
+        change['series'] = change['cp'].astype(str)
+        change = change.rename(columns={'strike':'x'})
+        charts.append({'title':'Change in OI (D2 − D1) by Strike', 'kind':'strike',
+                       'rows':_lf_rows(change,['x','series','value'])})
     for field,title in [('oi','Open Interest'),('volume','Traded Volume')]:
+        if mode == 'compare' and field == 'oi':
+            continue
         if field not in data.columns:
             continue
         sub=data.dropna(subset=['strike',field]).groupby(['strike','cp','tag'],as_index=False)[field].sum()
