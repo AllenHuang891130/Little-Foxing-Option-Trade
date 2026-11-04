@@ -68,6 +68,8 @@ function GammaInteractive({group}:{group:GammaGroup}) {
  const [minStrike,setMinStrike]=useState('');
  const [maxStrike,setMaxStrike]=useState('');
  const [profileMode,setProfileMode]=useState<'all'|'ex_nearest'|'ex_monthly'>('all');
+ const pointerFrame=useRef<number|null>(null);
+ const hoveredRef=useRef<number|null>(null);
  const entries=([['day',group.sessions.day],['night',group.sessions.night]] as const)
    .filter(([key,session])=>Boolean(session)&&(key==='day'?showDay:showNight)) as Array<['day'|'night',GammaSession]>;
  const allSessions=([['day',group.sessions.day],['night',group.sessions.night]] as const)
@@ -80,11 +82,52 @@ function GammaInteractive({group}:{group:GammaGroup}) {
  const w=940,h=280,left=78,right=24,top=22,bottom=46;
  const x=(strike:number)=>left+(strike-min)/(max-min||1)*(w-left-right);
  const scaleY=(v:number,lo:number,hi:number)=>top+(hi-v)/(hi-lo||1)*(h-top-bottom);
- const chosen=hovered??selected;
+ const chosen=selected??hovered;
  const rowFor=(s:GammaSession,k:number)=>s.strikes.find(r=>r.strike===k);
- const maxAbs=Math.max(1,...entries.flatMap(([,s])=>s.strikes.filter(r=>r.strike>=min&&r.strike<=max).flatMap(r=>[r.call_gex,r.put_gex,Math.abs(r.net_gex)])))/1e6;
+ // Stacked day/night bars: positive and negative contributions stack independently.
+ const stackedBounds=shown.flatMap(strike=>{
+  const d=entries.find(([key])=>key==='day')?.[1];
+  const n=entries.find(([key])=>key==='night')?.[1];
+  const dr=d?rowFor(d,strike):undefined;
+  const nr=n?rowFor(n,strike):undefined;
+  const parts=[
+   [dr?.call_gex??0,nr?.call_gex??0],
+   [-(dr?.put_gex??0),-(nr?.put_gex??0)],
+   [dr?.net_gex??0,nr?.net_gex??0],
+  ];
+  return parts.flatMap(([day,night])=>[
+   (Math.max(0,day)+Math.max(0,night))/1e6,
+   (Math.min(0,day)+Math.min(0,night))/1e6,
+  ]);
+ });
+ const maxAbs=Math.max(1,...stackedBounds.map(Math.abs));
  const y=(v:number)=>scaleY(v,-maxAbs*1.13,maxAbs*1.13);
- const barWidth=Math.max(1.2,Math.min(13,(w-left-right)/Math.max(1,shown.length)/4));
+ const barWidth=Math.max(2,Math.min(22,(w-left-right)/Math.max(1,shown.length)*.72));
+ const movePointer=(e:React.PointerEvent<SVGSVGElement>)=>{
+  if(selected!==null||!shown.length)return;
+  const bounds=e.currentTarget.getBoundingClientRect();
+  const sx=(e.clientX-bounds.left)*w/(bounds.width||1);
+  const ratio=Math.max(0,Math.min(1,(sx-left)/(w-left-right)));
+  const target=min+ratio*(max-min);
+  let lo=0,hi=shown.length-1;
+  while(lo<hi){const mid=(lo+hi)>>1;if(shown[mid]<target)lo=mid+1;else hi=mid;}
+  const candidate=lo>0&&Math.abs(shown[lo-1]-target)<Math.abs(shown[lo]-target)?shown[lo-1]:shown[lo];
+  if(hoveredRef.current===candidate)return;
+  hoveredRef.current=candidate;
+  if(pointerFrame.current!==null)cancelAnimationFrame(pointerFrame.current);
+  pointerFrame.current=requestAnimationFrame(()=>{setHovered(candidate);pointerFrame.current=null;});
+ };
+ const leavePointer=()=>{if(selected===null){hoveredRef.current=null;setHovered(null);}};
+ const pinStrike=()=>{const next=selected===null?(hoveredRef.current??hovered):null;setSelected(next);};
+ const keyDown=(e:React.KeyboardEvent<SVGSVGElement>)=>{
+  if(!shown.length)return;
+  if(e.key==='Escape'){setSelected(null);setHovered(null);return;}
+  if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight')return;
+  e.preventDefault();
+  const index=shown.indexOf(chosen??shown[0]);
+  const next=shown[Math.max(0,Math.min(shown.length-1,index+(e.key==='ArrowRight'?1:-1)))];
+  setSelected(next);setHovered(next);
+ };
  const ticks=Array.from({length:5},(_,i)=>min+(max-min)*i/4);
  const colors={day:{call:'#d45b3d',put:'#397ac0',net:'#d45b3d'},night:{call:'#efa787',put:'#8cb9e8',net:'#7c59ae'}};
  const legend=(<div style={{display:'flex',gap:16,flexWrap:'wrap',fontSize:12,margin:'8px 0 12px'}}>
@@ -95,18 +138,36 @@ function GammaInteractive({group}:{group:GammaGroup}) {
   {ticks.map((v,i)=><g key={i}><line x1={x(v)} x2={x(v)} y1={h-bottom} y2={h-bottom+5} stroke="#667085"/><text x={x(v)} y={h-bottom+19} textAnchor="middle" fontSize="11" fill="#667085">{fmt(v)}</text></g>)}
   <text x={left+4} y={13} fontSize="11" fill="#667085">TWD millions / 1% move</text>
  </>}
- const renderBars=(kind:'gross'|'net')=><svg viewBox={`0 0 ${w} ${h}`} style={{width:'100%',height:'auto',display:'block'}} role="img" aria-label={kind==='gross'?'Call Put GEX interactive chart':'Net GEX interactive chart'}>
+ const renderBars=(kind:'gross'|'net')=><svg viewBox={`0 0 ${w} ${h}`} style={{width:'100%',height:'auto',display:'block',cursor:'crosshair',touchAction:'pan-y',outline:'none'}} role="img" tabIndex={0} aria-label={kind==='gross'?'Call Put GEX chart, arrow keys move between strikes':'Net GEX chart, arrow keys move between strikes'} onPointerMove={movePointer} onPointerLeave={leavePointer} onClick={pinStrike} onKeyDown={keyDown}>
   {axis(maxAbs*1.13)}
-  {shown.flatMap((strike,i)=>entries.flatMap(([key,s],j)=>{
-   const r=rowFor(s,strike);if(!r)return [];
-   const offset=(j-(entries.length-1)/2)*barWidth*2.5;
-   const values=kind==='gross'?[{v:r.call_gex/1e6,c:colors[key].call,dx:-barWidth*.55},{v:-r.put_gex/1e6,c:colors[key].put,dx:barWidth*.55}]:[{v:r.net_gex/1e6,c:key==='night'?colors.night.net:r.net_gex>=0?'#d45b3d':'#397ac0',dx:0}];
-   return values.map(({v,c,dx},idx)=>{
-    const xx=x(strike)+offset+dx-barWidth/2;
-    return <rect key={`${i}-${key}-${idx}`} x={xx} y={Math.min(y(v),y(0))} width={barWidth} height={Math.max(1,Math.abs(y(v)-y(0)))} fill={c} opacity={chosen===strike?1:.83} stroke={chosen===strike?'#111827':'none'} strokeWidth="1" style={{cursor:'crosshair'}} onMouseEnter={()=>setHovered(strike)} onMouseLeave={()=>setHovered(null)} onClick={()=>setSelected(selected===strike?null:strike)}><title>{`${key.toUpperCase()} | Strike ${fmt(strike)} | ${kind==='net'?'Net':idx===0?'Call':'Put'} GEX: ${million(v*1e6)}`}</title></rect>;
+  {shown.flatMap((strike,i)=>{
+   const day=entries.find(([k])=>k==='day')?.[1];
+   const night=entries.find(([k])=>k==='night')?.[1];
+   const dr=day?rowFor(day,strike):undefined;
+   const nr=night?rowFor(night,strike):undefined;
+   const components=kind==='gross' ? [
+    {id:'call',dv:(dr?.call_gex??0)/1e6,nv:(nr?.call_gex??0)/1e6,dx:-barWidth*.30,dayColor:colors.day.call,nightColor:colors.night.call},
+    {id:'put',dv:-(dr?.put_gex??0)/1e6,nv:-(nr?.put_gex??0)/1e6,dx:barWidth*.30,dayColor:colors.day.put,nightColor:colors.night.put},
+   ] : [
+    {id:'net',dv:(dr?.net_gex??0)/1e6,nv:(nr?.net_gex??0)/1e6,dx:0,
+     dayColor:(dr?.net_gex??0)>=0?'#d45b3d':'#397ac0',
+     nightColor:(nr?.net_gex??0)>=0?'#efa787':'#8cb9e8'},
+   ];
+   return components.flatMap(({id,dv,nv,dx,dayColor,nightColor})=>{
+    const bw=barWidth*(kind==='gross'?.60:.82);
+    const xx=x(strike)+dx-bw/2;
+    // A negative contribution starts at the negative stack base; positive at positive base.
+    const dayStart=0;
+    const nightStart=nv>=0?Math.max(0,dv):Math.min(0,dv);
+    const rect=(value:number,start:number,color:string,key:string)=>{
+     if(!Number.isFinite(value)||value===0)return null;
+     const y1=y(start),y2=y(start+value);
+     return <rect key={`${i}-${id}-${key}`} x={xx} y={Math.min(y1,y2)} width={bw} height={Math.max(0.5,Math.abs(y2-y1))} fill={color} opacity={key==='day'?.94:.76} stroke={key==='night'?color:'none'} strokeWidth={key==='night'?.6:0} pointerEvents="none"/>;
+    };
+    return [rect(dv,dayStart,dayColor,'day'),rect(nv,nightStart,nightColor,'night')];
    });
-  }))}
-  {chosen!==null&&shown.includes(chosen)&&<line x1={x(chosen)} x2={x(chosen)} y1={top} y2={h-bottom} stroke="#475467" strokeDasharray="3 4" pointerEvents="none"/>}
+  })}
+  {chosen!==null&&shown.includes(chosen)&&<g pointerEvents="none"><line x1={x(chosen)} x2={x(chosen)} y1={top} y2={h-bottom} stroke="#475467" strokeWidth="1.2" strokeDasharray="3 4"/><rect x={Math.min(w-right-84,Math.max(left,x(chosen)-40))} y={h-bottom+25} width="80" height="19" rx="3" fill="#1f2937"/><text x={Math.min(w-right-44,Math.max(left+40,x(chosen)))} y={h-bottom+38} fontSize="11" fill="white" textAnchor="middle">{fmt(chosen)}</text></g>}
  </svg>;
  const profileData=entries.flatMap(([,s])=>s.profile.map(p=>({x:p.futures_price,y:num(p[profileMode])??0})));
  const pxMin=profileData.length?Math.min(...profileData.map(p=>p.x)):0,pxMax=profileData.length?Math.max(...profileData.map(p=>p.x)):1;
@@ -132,9 +193,9 @@ function GammaInteractive({group}:{group:GammaGroup}) {
    <button type="button" className="analysis-button" onClick={()=>{setMinStrike('');setMaxStrike('');setSelected(null);}}>Reset Range</button>
   </div>
   {shown.length===0?<p>No strikes within the selected range.</p>:<>
-   <h4>① Call / Put Gamma by Strike (Day: OI / Night: Volume)</h4>{renderBars('gross')}
-   <h4>② Net Gamma by Strike (Day: OI / Night: Volume)</h4>{renderBars('net')}
-   {chosen!==null&&<div style={{padding:12,background:'rgba(128,128,128,.08)',borderRadius:8,marginBottom:14}}><strong>Strike {fmt(chosen)}</strong> <span style={{fontSize:12}}>· hover to inspect, click to pin</span><div style={{display:'flex',gap:22,flexWrap:'wrap',marginTop:8}}>{entries.map(([key,s])=>{const r=rowFor(s,chosen);return <div key={key} style={{fontSize:13}}><strong>{key.toUpperCase()}</strong><div>Call: {r?million(r.call_gex):'—'}</div><div>Put: {r?million(-r.put_gex):'—'}</div><div>Net: {r?million(r.net_gex):'—'}</div></div>})}</div></div>}
+   <h4>① Call / Put Gamma by Strike — Stacked Day + Night</h4><div style={{fontSize:12,opacity:.75,marginBottom:6}}>Day: dark base segment · Night: light extension (stacked) · hover anywhere to snap to nearest strike</div>{renderBars('gross')}
+   <h4>② Net Gamma by Strike — Independently Calculated, Then Stacked</h4>{renderBars('net')}
+   {chosen!==null&&<div aria-live="off" style={{padding:12,background:'rgba(128,128,128,.08)',borderRadius:8,marginBottom:14,position:'sticky',bottom:8,zIndex:3,backdropFilter:'blur(8px)',border:'1px solid rgba(128,128,128,.20)'}}><strong>Strike {fmt(chosen)}</strong> <span style={{fontSize:12}}>· {selected!==null?'PINNED · click chart / Esc to unlock':'move cursor to inspect · click to pin · ← → to step'}</span><div style={{display:'flex',gap:22,flexWrap:'wrap',marginTop:8}}>{entries.map(([key,s])=>{const r=rowFor(s,chosen);return <div key={key} style={{fontSize:13}}><strong>{key.toUpperCase()}</strong><div>Call: {r?million(r.call_gex):'—'}</div><div>Put: {r?million(-r.put_gex):'—'}</div><div>Net: {r?million(r.net_gex):'—'}</div></div>})}{entries.length===2&&<div style={{fontSize:13,fontWeight:600}}>Day + Night Net (arithmetic): {million((rowFor(entries[0][1],chosen)?.net_gex??0)+(rowFor(entries[1][1],chosen)?.net_gex??0))}</div>}</div></div>}
   </>}
   <h4>③ Repriced Gamma Profile / Gamma Flip (different weighting bases)</h4>
   <label style={{fontSize:12}}>Profile<select value={profileMode} onChange={e=>setProfileMode(e.target.value as typeof profileMode)}><option value="all">All</option><option value="ex_nearest">Excluding nearest</option><option value="ex_monthly">Excluding nearest monthly</option></select></label>
