@@ -230,8 +230,11 @@ function TerminalChart({chart}:{chart:LegacyChart}){
  const active=locked??hover;
  const rows=chart.rows.filter(r=>visible.includes(String(r.x))&&!hidden.includes(r.series));
  const maxValue=Math.max(1,...rows.map(r=>Math.abs(Number(r.value)||0)));
- const minValue=chart.kind==='line'?Math.min(0,...rows.map(r=>Number(r.value)||0)):-maxValue;
- const maxY=chart.kind==='line'?Math.max(1,...rows.map(r=>Number(r.value)||0)):maxValue;
+ const actualMin=Math.min(0,...rows.map(r=>Number(r.value)||0));
+ const actualMax=Math.max(0,...rows.map(r=>Number(r.value)||0));
+ // Zero-based charts only reserve negative space when negative values exist.
+ const minValue=actualMin<0?actualMin*1.08:0;
+ const maxY=actualMax>0?actualMax*1.08:1;
  const w=980,h=330,l=76,t=24,r=22,b=56;
  const px=(idx:number)=>l+(idx+.5)*(w-l-r)/Math.max(visible.length,1);
  const py=(v:number)=>t+(maxY-v)/(maxY-minValue||1)*(h-t-b);
@@ -249,7 +252,7 @@ function TerminalChart({chart}:{chart:LegacyChart}){
  };
  const width=Math.min(22,Math.max(1.4,(w-l-r)/Math.max(visible.length,1)/Math.max(1,series.length+0.4)));
  const visibleSeries=series.filter(s=>!hidden.includes(s));
- return <section style={{marginBottom:28,border:'1px solid var(--border, #dddddd44)',borderRadius:12,padding:12}}>
+ return <section style={{minWidth:0,marginBottom:0,border:'1px solid var(--border, #dddddd44)',borderRadius:12,padding:12}}>
   <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
    <strong>{chart.title}</strong>
    <div style={{display:'flex',gap:6}}><button type="button" onClick={()=>{setStart(0);setWindowSize(60);setLocked(null);}}>Reset</button><button type="button" onClick={()=>setWindowSize(v=>Math.max(8,Math.floor(v/1.5)))}>Zoom +</button><button type="button" onClick={()=>setWindowSize(v=>Math.min(labels.length,Math.ceil(v*1.5)))}>Zoom −</button></div>
@@ -366,7 +369,8 @@ export default function Options(){
   <div className="panel"><div className="sectiontitle"><h2>{modes.find(m=>m.id===mode)?.label} Analysis</h2><span>{busy?'Working...':stale?'Previous Result':result?'V4 results':'Waiting for analysis'}</span></div>
    {stale&&<div className="notice" role="status"><Info size={15} style={{verticalAlign:'middle',marginRight:7}}/>Settings have changed. The chart below is from the previous successful analysis. Run Analysis to update it.</div>}
    {result?<>
-    {mode==='gamma'&&result.gamma_groups?.length?result.gamma_groups.map(group=><GammaInteractive key={group.expiry} group={group}/>):mode==='poc'&&result.interactive_profile?.length?<ProfileInteractive rows={result.interactive_profile} meta={result.meta}/>:result.images?.length?result.images.map(chart=><section key={chart.expiry} style={{marginBottom:32}}><h3>Expiry: {chart.expiry}</h3>{chart.interactive_charts?.length?chart.interactive_charts.map((c,i)=><TerminalChart key={`${chart.expiry}-${i}`} chart={c}/>):<img className="analysis-image" src={chart.image} alt={`V4 ${chart.expiry}`}/>}</section>):result.interactive_charts?.length?result.interactive_charts.map((c,i)=><TerminalChart key={i} chart={c}/>):<img className="analysis-image" src={result.image} alt="TAIFEX V4 analytics charts"/>}
+    <style>{`.lf-interactive-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}@media(max-width:850px){.lf-interactive-grid{grid-template-columns:1fr}}`}</style>
+    {mode==='gamma'&&result.gamma_groups?.length?result.gamma_groups.map(group=><GammaInteractive key={group.expiry} group={group}/>):mode==='poc'&&result.interactive_profile?.length?<ProfileInteractive rows={result.interactive_profile} meta={result.meta}/>:result.images?.length?result.images.map(chart=><section key={chart.expiry} style={{marginBottom:32}}><h3>Expiry: {chart.expiry}</h3>{chart.interactive_charts?.length?<div className="lf-interactive-grid">{chart.interactive_charts.map((c,i)=><TerminalChart key={`${chart.expiry}-${i}`} chart={c}/>)}</div>:<img className="analysis-image" src={chart.image} alt={`V4 ${chart.expiry}`}/>}</section>):result.interactive_charts?.length?<div className="lf-interactive-grid">{result.interactive_charts.map((c,i)=><TerminalChart key={i} chart={c}/>)}</div>:<img className="analysis-image" src={result.image} alt="TAIFEX V4 analytics charts"/>}
     {mode!=='gamma'&&(result.interactive_charts?.length||result.interactive_profile?.length||result.images?.some(c=>c.interactive_charts?.length))?<details style={{marginTop:12}}><summary>Original V4 static charts (reference)</summary>{result.images?.length?result.images.map(c=><img key={c.expiry} className="analysis-image" src={c.image} alt={c.expiry}/>):<img className="analysis-image" src={result.image} alt="Original V4 chart"/>}</details>:null}
     {mode==='gamma'&&result.activity&&<details><summary>Gamma-weighted Volume Activity (not dealer GEX)</summary><pre className="result-meta">{JSON.stringify(result.activity,null,2)}</pre></details>}
      {mode==='poc'&&result.csv&&<p><a className="analysis-button" href={result.csv} download={`LF_MTX_VP_${s.date1}_${String(result.meta?.expiry||'AUTO')}_${s.pocSession}.csv`}>Download Profile CSV</a></p>}
