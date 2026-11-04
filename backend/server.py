@@ -886,7 +886,7 @@ class GammaQuery(BaseModel):
     date2: date | None = None  # TAIFEX night data label date
     session: Literal['day', 'night', 'daynight'] = 'day'
     expiry: str = '__COMBINED__'
-    oi_day: date | None = None  # Last *published* OI as of night snapshot
+    oi_day: date | None = None  # Deprecated compatibility field; ignored
     position_mode: Literal['call_positive','call_negative','all_long','all_short'] = 'call_positive'
     iv_mode: Literal['individual','atm'] = 'individual'
     profile_range_pct: float = Field(default=10, ge=1, le=30)
@@ -945,8 +945,6 @@ def gamma_expiries(q: GammaQuery):
 @app.post('/gamma/analyze')
 def gamma_analyze(q: GammaQuery):
     try:
-        if q.session in ('night', 'daynight') and q.oi_day is None:
-            raise ValueError('Night Gamma requires OI Snapshot Date (latest officially published day OI)')
         if q.session in ('night', 'daynight') and q.date2 is None:
             raise ValueError('Night Data Label Date is required')
 
@@ -977,7 +975,6 @@ def gamma_analyze(q: GammaQuery):
                         raw = gamma.analyze_session(
                             dt, session=sess, expiry_scope=scope,
                             selected_expiries=selected,
-                            oi_day=q.oi_day if sess == 'night' else None,
                             position_mode=q.position_mode, iv_mode=q.iv_mode,
                             profile_range_pct=q.profile_range_pct,
                             include_0dte=q.include_0dte, force=q.force,
@@ -990,9 +987,11 @@ def gamma_analyze(q: GammaQuery):
 
         if not results:
             raise ValueError('No Gamma charts generated: ' + str(failures[:5]))
-        note = ('Interactive Gamma Wall: hover or click bars for strike-level GEX. '
-                'Dealer signs are assumptions. Night OI uses the selected published daily snapshot. '
-                'Day and Night may use different OI vintages; changes are not purely price/IV effects.')
+        note = ('Interactive Gamma Wall: hover or click bars for strike-level values. '
+                'Day is weighted by official OI; night is weighted by session traded volume. '
+                'Night is Gamma-weighted activity, NOT dealer inventory or official OI. '
+                'Day/Night heights must not be interpreted as changes in outstanding positions. '
+                'Dealer signs are assumptions.')
         return {
             'image': next(iter(results[0]['sessions'].values()))['image'],
             'gamma_groups': results,
