@@ -21,8 +21,10 @@ from pathlib import PurePosixPath
 import strategy_storage as strategy
 import research_storage as research
 import v4_engine as v4
+from markets_insights_api import router as markets_insights_router
 
 app = FastAPI(title="Quant Research Lab V4 API", version="0.3")
+app.include_router(markets_insights_router)
 # Local-network development only. Restrict origins before public deployment.
 origins = [x.strip().rstrip("/") for x in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",") if x.strip()]
 app.add_middleware(
