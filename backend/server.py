@@ -25,13 +25,17 @@ from markets_insights_api import router as markets_insights_router
 
 app = FastAPI(title="Quant Research Lab V4 API", version="0.3")
 app.include_router(markets_insights_router)
-# Local-network development only. Restrict origins before public deployment.
-origins = [x.strip().rstrip("/") for x in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",") if x.strip()]
+# Explicitly allow the public Vercel frontend and local development.
+# Additional origins can be configured through ALLOWED_ORIGINS (comma-separated).
+origins = sorted(set(
+    ["https://little-foxing-option-trade.vercel.app", "http://localhost:3000"]
+    + [x.strip().rstrip("/") for x in os.getenv("ALLOWED_ORIGINS", "").split(",") if x.strip()]
+))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_methods=["GET", "POST", "DELETE", "PATCH"],
-    allow_headers=["Content-Type", "X-Research-Password"],
+    allow_methods=["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Research-Password", "X-Insights-Admin-Key"],
 )
 plot_lock = threading.Lock()
 
