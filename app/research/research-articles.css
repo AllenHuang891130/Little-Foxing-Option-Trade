@@ -1,0 +1,14 @@
+.research-articles-panel{padding:20px;border:1px solid var(--border,#8885);border-radius:12px;margin:16px 0 24px}
+.research-articles-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.research-article-markdown{line-height:1.85;overflow-wrap:anywhere;max-width:100%;padding-top:12px}
+.research-article-markdown h1,.research-article-markdown h2,.research-article-markdown h3{font-weight:700;line-height:1.4;margin:1.5em 0 .6em}
+.research-article-markdown h1{font-size:1.8rem}.research-article-markdown h2{font-size:1.45rem}.research-article-markdown h3{font-size:1.2rem}
+.research-article-markdown p,.research-article-markdown ul,.research-article-markdown ol{margin:12px 0}
+.research-article-markdown ul,.research-article-markdown ol{padding-left:25px}
+.research-article-markdown a{text-decoration:underline;overflow-wrap:anywhere}
+.research-article-markdown table{display:block;overflow-x:auto;border-collapse:collapse;max-width:100%;margin:16px 0}
+.research-article-markdown th,.research-article-markdown td{border:1px solid var(--border,#8885);padding:8px 12px;white-space:nowrap}
+.research-article-markdown pre{overflow-x:auto;padding:14px;border-radius:8px;background:var(--muted,#8882)}
+.research-article-markdown code{overflow-wrap:anywhere}
+.research-article-markdown blockquote{border-left:3px solid #888;padding-left:14px;opacity:.8}
+.research-article-markdown hr{border:0;border-top:1px solid var(--border,#8885);margin:22px 0}
