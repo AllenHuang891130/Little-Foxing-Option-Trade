@@ -27,6 +27,7 @@ function Markdown({content}:{content:string}){
 }
 export default function ResearchArticles({folder,adminPassword,onChanged,hasOtherItems=false}:{folder:string;adminPassword:string;onChanged?:()=>void;hasOtherItems?:boolean}){
  const [articles,setArticles]=useState<Article[]>([]);
+ const [articleId,setArticleId]=useState('');
  const [current,setCurrent]=useState<Article|null>(null);
  const [editing,setEditing]=useState(false);
  const [preview,setPreview]=useState(false);
@@ -43,10 +44,10 @@ export default function ResearchArticles({folder,adminPassword,onChanged,hasOthe
  },[folder]);
  useEffect(()=>{void refresh();setCurrent(null);setEditing(false);setShowPicker(false)},[refresh]);
  async function open(a:Article){setBusy(true);setError('');try{setCurrent(await api(`/research/articles/item?path=${encodeURIComponent(a.path)}`));setEditing(false)}catch(e){setError(e instanceof Error?e.message:String(e))}finally{setBusy(false)}}
- function start(a?:Article){setCurrent(a||null);setTitle(a?.title||'');setSummary(a?.summary||'');setDate(a?.date||today());setContent(a?.content||'');setAttachments(a?.attachments||[]);setPreview(false);setEditing(true);setError('')}
+ function start(a?:Article){setArticleId(a?.slug||('article-'+Array.from(crypto.getRandomValues(new Uint8Array(12))).map(x=>x.toString(16).padStart(2,'0')).join('')));setCurrent(a||null);setTitle(a?.title||'');setSummary(a?.summary||'');setDate(a?.date||today());setContent(a?.content||'');setAttachments(a?.attachments||[]);setPreview(false);setEditing(true);setError('')}
  async function upload(file:File,kind:'image'|'attachment'){
   if(!adminPassword)throw new Error('請先啟用 Admin Mode');
-  const body=new FormData();body.append('file',file);body.append('folder',folder);body.append('kind',kind);
+  const body=new FormData();body.append('file',file);body.append('folder',folder);body.append('kind',kind);if(articleId&&(!current||current.path.includes('/.lf-articles/')))body.append('article_id',articleId);
   return api('/research/articles/upload',{method:'POST',headers:{'X-Research-Password':adminPassword},body});
  }
  function insertMarkdown(text:string){
@@ -74,7 +75,7 @@ export default function ResearchArticles({folder,adminPassword,onChanged,hasOthe
  }
  async function pickExisting(){
   setError('');setShowPicker(v=>!v);
-  try{const data=await api('/research/tree');setAvailable((data.items||[]).filter((x:StorageItem)=>x.id!=null&&!x.path?.includes('/.lf-assets/')&&!x.name.endsWith('.lfarticle.json')))}
+  try{const data=await api('/research/tree');setAvailable((data.items||[]).filter((x:StorageItem)=>x.id!=null&&!x.path?.includes('/.lf-assets/')&&!x.path?.includes('/.lf-articles/')&&!x.name.endsWith('.lfarticle.json')))}
   catch(e){setError(e instanceof Error?e.message:String(e))}
  }
  async function save(){
@@ -82,7 +83,7 @@ export default function ResearchArticles({folder,adminPassword,onChanged,hasOthe
   setBusy(true);setError('');
   try{
    const url=current?`/research/articles/item?path=${encodeURIComponent(current.path)}`:'/research/articles';
-   const result=await api(url,{method:current?'PUT':'POST',headers:{'Content-Type':'application/json','X-Research-Password':adminPassword},body:JSON.stringify({folder,title,summary,date,content,attachments})});
+   const result=await api(url,{method:current?'PUT':'POST',headers:{'Content-Type':'application/json','X-Research-Password':adminPassword},body:JSON.stringify({folder,title,summary,date,content,attachments,slug:articleId})});
    await refresh();await open({path:result.path} as Article);onChanged?.();
   }catch(e){setError(e instanceof Error?e.message:String(e))}finally{setBusy(false)}
  }
