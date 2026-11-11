@@ -17,6 +17,9 @@ import research_storage as storage
 router = APIRouter(prefix='/research/articles', tags=['Research Articles'])
 SUFFIX = '.lfarticle.json'
 ASSETS = '.lf-assets'
+PACKAGES = '.lf-articles'
+PACKAGE_META = 'article.json'
+SLUG_PATTERN = re.compile(r'article-[0-9a-f]{20,32}$')
 MAX_CONTENT = 250_000
 IMAGE_TYPES = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/gif': '.gif'}
 
@@ -27,6 +30,7 @@ class ArticleInput(BaseModel):
     date: date
     content: str = Field(min_length=1, max_length=MAX_CONTENT)
     attachments: list[dict] = Field(default_factory=list, max_length=100)
+    slug: str | None = None
 
 def auth(password):
     expected = os.getenv('RESEARCH_ADMIN_PASSWORD', '')
@@ -46,7 +50,7 @@ def article_path(folder, slug):
 
 def read_article(path):
     path = checked_path(path)
-    if not path.endswith(SUFFIX):
+    if not (path.endswith(SUFFIX) or (f'/{PACKAGES}/' in '/' + path and path.endswith('/' + PACKAGE_META))):
         raise HTTPException(400, 'Not an article')
     try:
         article = json.loads(storage.download_file(path).decode('utf-8'))
@@ -79,6 +83,18 @@ def list_articles(folder: str = ''):
                 articles.append({k: article.get(k) for k in ('path','slug','title','summary','date','folder','attachments')})
             except HTTPException:
                 continue
+    # V3 article packages are nested under .lf-articles; legacy files stay readable.
+    package_folder = '/'.join(x for x in (folder, PACKAGES) if x)
+    for entry in storage.list_items(package_folder):
+        slug = entry.get('name', '')
+        if not SLUG_PATTERN.fullmatch(slug) or entry.get('id') is not None:
+            continue
+        path = f'{package_folder}/{slug}/{PACKAGE_META}'
+        try:
+            article = read_article(path)
+            articles.append({k: article.get(k) for k in ('path','slug','title','summary','date','folder','attachments')})
+        except HTTPException:
+            continue
     return {'articles': sorted(articles, key=lambda a: str(a.get('date') or ''), reverse=True)}
 
 @router.get('/item')
@@ -89,9 +105,20 @@ def get_article(path: str):
 def create_article(body: ArticleInput, x_research_password: str | None = Header(default=None)):
     auth(x_research_password)
     folder = checked_path(body.folder)
-    # Random IDs avoid Unicode title collisions and accidental overwrite.
-    slug = 'article-' + uuid.uuid4().hex[:20]
-    path = article_path(folder, slug)
+    slug = body.slug or ('article-' + uuid.uuid4().hex[:24])
+    if not SLUG_PATTERN.fullmatch(slug):
+        raise HTTPException(400, 'Invalid article ID')
+    path = '/'.join(x for x in (folder, PACKAGES, slug, PACKAGE_META) if x)
+    # Reject collisions; upload_file uses upsert, so existence must be checked first.
+    try:
+        storage.download_file(path)
+    except Exception as exc:
+        # Only a missing object is expected. Other errors must not permit overwrite.
+        response = getattr(exc, 'response', None)
+        if response is None or response.status_code not in (400, 404):
+            raise HTTPException(503, 'Unable to verify article ID availability') from exc
+    else:
+        raise HTTPException(409, 'Article ID already exists')
     article = {'slug': slug, 'folder': folder, 'title': body.title.strip(),
                'summary': body.summary, 'date': body.date.isoformat(),
                'content': body.content, 'attachments': validate_attachments(body.attachments)}
@@ -113,6 +140,7 @@ def update_article(path: str, body: ArticleInput, x_research_password: str | Non
 @router.post('/upload')
 async def upload_asset(file: UploadFile = File(...), folder: str = Form(''),
                        kind: str = Form('attachment'),
+                       article_id: str = Form(''),
                        x_research_password: str | None = Header(default=None)):
     auth(x_research_password)
     folder = checked_path(folder)
@@ -136,7 +164,15 @@ async def upload_asset(file: UploadFile = File(...), folder: str = Form(''),
         extension = PurePosixPath(name).suffix.lower()[:12]
         if not re.fullmatch(r'\.[a-z0-9]{1,10}', extension):
             extension = '.bin'
-    path = '/'.join(x for x in (folder, ASSETS, uuid.uuid4().hex + extension) if x)
+    if article_id:
+        if not SLUG_PATTERN.fullmatch(article_id):
+            raise HTTPException(400, 'Invalid article ID')
+        path = '/'.join(x for x in (folder, PACKAGES, article_id,
+                                    'images' if kind == 'image' else 'attachments',
+                                    uuid.uuid4().hex + extension) if x)
+    else:
+        # Backward compatible with legacy articles.
+        path = '/'.join(x for x in (folder, ASSETS, uuid.uuid4().hex + extension) if x)
     storage.upload_file(path, data, mime or 'application/octet-stream')
     return {'path': path, 'name': name, 'url': f'/research/articles/media?path={quote(path, safe="")}' if kind == 'image' else None}
 
@@ -144,7 +180,7 @@ async def upload_asset(file: UploadFile = File(...), folder: str = Form(''),
 def media(path: str):
     path = checked_path(path)
     parts = path.split('/')
-    if ASSETS not in parts:
+    if ASSETS not in parts and not (PACKAGES in parts and 'images' in parts):
         raise HTTPException(400, 'Not an article image')
     suffix = PurePosixPath(path).suffix.lower()
     mime = {'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.gif':'image/gif'}.get(suffix)
