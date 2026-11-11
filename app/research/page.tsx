@@ -392,7 +392,7 @@ export default function Research() {
         {error && <p style={{ color: '#dc5252', marginBottom: 12, overflowWrap: 'anywhere' }}>{error}</p>}
         {message && <p style={{ marginBottom: 12 }}>{message}</p>}
         {busy && <p className="muted small">Loading...</p>}
-        <ResearchArticles folder={folder} adminPassword={adminPassword} onChanged={() => { void load(folder); void loadTree(); }} />
+        
         <div style={{ display: 'grid', gap: 8 }}>
           {visible.map(item => {
             const path = item.path || joinPath(folder, item.name);
@@ -426,6 +426,9 @@ export default function Research() {
             </div>;
           })}
         </div>
+        <ResearchArticles folder={folder} adminPassword={adminPassword}
+          hasOtherItems={visible.length > 0}
+          onChanged={() => { void load(folder); void loadTree(); }} />
       </div>
 
       {preview && <div role="dialog" aria-modal="true" aria-label="PDF preview"
