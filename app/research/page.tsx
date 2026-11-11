@@ -96,7 +96,7 @@ export default function Research() {
       const response = await request(`/research/files?folder=${encodeURIComponent(target)}`);
       const data: { items?: StorageItem[] } = await response.json();
       setItems((data.items || []).filter(item =>
-        item.name !== '.folder' && item.name !== '.emptyFolderPlaceholder'
+        item.name !== '.folder' && item.name !== '.emptyFolderPlaceholder' && !item.name.endsWith('.lfarticle.json') && item.name !== '.lf-assets'
       ));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load files');
@@ -107,7 +107,7 @@ export default function Research() {
     const response = await request('/research/tree');
     const data: { items?: StorageItem[] } = await response.json();
     const result = (data.items || []).filter(item =>
-      item.name !== '.folder' && item.name !== '.emptyFolderPlaceholder'
+      item.name !== '.folder' && item.name !== '.emptyFolderPlaceholder' && !item.name.endsWith('.lfarticle.json') && item.name !== '.lf-assets'
     );
     setTree(result);
     return result;
@@ -365,7 +365,7 @@ export default function Research() {
         </form>
       </div>}
 
-      <ResearchArticles folder={folder} adminPassword={adminPassword} onChanged={() => { void load(folder); void loadTree(); }} />
+
 
       <div className="panel" style={{ padding: 16 }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
@@ -396,6 +396,7 @@ export default function Research() {
           <Folder size={32} style={{ opacity: .5 }} />
           <p>{query ? 'No matching results' : 'This folder is empty'}</p>
         </div>}
+        <ResearchArticles folder={folder} adminPassword={adminPassword} onChanged={() => { void load(folder); void loadTree(); }} />
         <div style={{ display: 'grid', gap: 8 }}>
           {visible.map(item => {
             const path = item.path || joinPath(folder, item.name);
