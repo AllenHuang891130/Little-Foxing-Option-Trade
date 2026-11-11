@@ -1,0 +1,27 @@
+/* Little Foxing | Markets Insights Markdown article styling */
+.insights-markdown { font-size: 15px; line-height: 1.9; overflow-wrap: anywhere; }
+.insights-markdown h1, .insights-markdown h2, .insights-markdown h3, .insights-markdown h4 { font-weight: 700; line-height: 1.4; margin: 1.8em 0 .7em; }
+.insights-markdown h1 { font-size: 1.8rem; }
+.insights-markdown h2 { font-size: 1.45rem; padding-bottom: .4em; border-bottom: 1px solid var(--border, #8884); }
+.insights-markdown h3 { font-size: 1.2rem; }
+.insights-markdown h4 { font-size: 1.05rem; }
+.insights-markdown p { margin: .8em 0 1.2em; }
+.insights-markdown ul, .insights-markdown ol { padding-left: 1.7em; margin: .8em 0 1.3em; }
+.insights-markdown ul { list-style: disc; }
+.insights-markdown ol { list-style: decimal; }
+.insights-markdown li { margin: .3em 0; }
+.insights-markdown li > p { margin: .25em 0; }
+.insights-markdown strong { font-weight: 750; }
+.insights-markdown em { font-style: italic; }
+.insights-markdown a { color: #60a5fa; text-decoration: underline; text-underline-offset: 3px; }
+.insights-markdown a:hover { opacity: .8; }
+.insights-markdown hr { border: 0; border-top: 1px solid var(--border, #8884); margin: 2rem 0; }
+.insights-markdown table { width: 100%; border-collapse: collapse; font-size: .9rem; white-space: nowrap; }
+.insights-markdown th, .insights-markdown td { padding: 11px 13px; text-align: left; border-bottom: 1px solid var(--border, #8884); }
+.insights-markdown th { font-weight: 700; background: rgba(127,127,127,.12); }
+.insights-markdown tbody tr:nth-child(even) { background: rgba(127,127,127,.045); }
+.insights-markdown .table-scroll { overflow-x: auto; }
+.insights-markdown blockquote { margin: 1.4em 0; padding: .3em 1.1em; border-left: 3px solid #60a5fa; background: rgba(127,127,127,.07); }
+.insights-markdown pre { padding: 14px; border-radius: 8px; background: rgba(127,127,127,.12); overflow-x: auto; }
+.insights-markdown code { font-size: .9em; }
+@media (max-width: 640px) { .insights-markdown { font-size: 14px; } .insights-markdown h2 { font-size: 1.3rem; } }
