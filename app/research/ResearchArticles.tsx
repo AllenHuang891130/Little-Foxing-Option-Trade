@@ -25,7 +25,7 @@ function Markdown({content}:{content:string}){
   a:({href,children})=><a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
  }}>{content}</ReactMarkdown></div>;
 }
-export default function ResearchArticles({folder,adminPassword,onChanged}:{folder:string;adminPassword:string;onChanged?:()=>void}){
+export default function ResearchArticles({folder,adminPassword,onChanged,hasOtherItems=false}:{folder:string;adminPassword:string;onChanged?:()=>void;hasOtherItems?:boolean}){
  const [articles,setArticles]=useState<Article[]>([]);
  const [current,setCurrent]=useState<Article|null>(null);
  const [editing,setEditing]=useState(false);
@@ -99,7 +99,7 @@ export default function ResearchArticles({folder,adminPassword,onChanged}:{folde
  }
  return <div className="lf-article-list">
   <div className="lf-article-actions">
-   <strong>Articles &amp; Files</strong>
+   <strong>{articles.length > 0 ? "Research Articles" : ""}</strong>
    {adminPassword&&<button type="button" style={btn} onClick={()=>start()} disabled={busy}><Plus size={16}/> New Article</button>}
   </div>
   {error&&<p role="alert" style={{color:'#d65c5c',overflowWrap:'anywhere'}}>{error}</p>}
@@ -130,6 +130,6 @@ export default function ResearchArticles({folder,adminPassword,onChanged}:{folde
    <Markdown content={current.content||''}/>
    {!!current.attachments?.length&&<section className="lf-article-attachments"><h3>Attachments · 附件下載</h3>{current.attachments.map(a=><button type="button" style={btn} key={a.path} onClick={()=>void download(a)} disabled={busy}><Download size={16}/>{a.name}</button>)}</section>}
    {adminPassword&&<div className="lf-article-buttons"><button type="button" style={btn} onClick={()=>start(current)}><Pencil size={16}/> 編輯文章</button><button type="button" style={btn} onClick={()=>void remove()}><Trash2 size={16}/> 刪除文章</button></div>}
-  </article>:<div className="lf-article-cards">{articles.map(a=><button type="button" className="lf-article-card" key={a.path} onClick={()=>void open(a)} disabled={busy}><FileText size={22}/><span><strong>{a.title}</strong><small>{a.date} · {a.summary||'Markdown 研究文章'}</small></span></button>)}{articles.length===0&&<p className="muted small">這個資料夾尚無文章，可在 Admin Mode 新增。</p>}</div>}
+  </article>:<div className="lf-article-cards">{articles.map(a=><button type="button" className="lf-article-card" key={a.path} onClick={()=>void open(a)} disabled={busy}><FileText size={22}/><span><strong>{a.title}</strong><small>{a.date} · {a.summary||'Markdown 研究文章'}</small></span></button>)}{articles.length===0&&!hasOtherItems&&!adminPassword&&<p className="muted small">This folder is empty</p>}</div>}
  </div>
 }
