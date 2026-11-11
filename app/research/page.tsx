@@ -392,10 +392,6 @@ export default function Research() {
         {error && <p style={{ color: '#dc5252', marginBottom: 12, overflowWrap: 'anywhere' }}>{error}</p>}
         {message && <p style={{ marginBottom: 12 }}>{message}</p>}
         {busy && <p className="muted small">Loading...</p>}
-        {!busy && visible.length === 0 && <div style={{ textAlign: 'center', padding: 40 }}>
-          <Folder size={32} style={{ opacity: .5 }} />
-          <p>{query ? 'No matching results' : 'This folder is empty'}</p>
-        </div>}
         <ResearchArticles folder={folder} adminPassword={adminPassword} onChanged={() => { void load(folder); void loadTree(); }} />
         <div style={{ display: 'grid', gap: 8 }}>
           {visible.map(item => {
