@@ -166,3 +166,45 @@ def publish_article(payload: PublishRequest, x_insights_admin_key: str | None = 
                      'content': base64.b64encode(json.dumps(article, ensure_ascii=False, indent=2).encode()).decode(),
                      'branch': BRANCH, **({'sha': existing['sha']} if existing else {})})
     return {'ok': True, 'slug': slug, 'category': payload.category}
+
+
+@router.delete('/articles/{category}/{slug}')
+def delete_article(category: str, slug: str, x_insights_admin_key: str | None = Header(default=None)):
+    """Delete one published article and its managed attachment, if any."""
+    _require_admin(x_insights_admin_key)
+    if category not in CATEGORIES:
+        raise HTTPException(404, 'Unknown category')
+    slug = _safe_slug(slug)
+    path = f'{ROOT}/{category}/{slug}.json'
+    record = _gh('GET', path)
+    if not record:
+        raise HTTPException(404, 'Article not found')
+    try:
+        article = json.loads(base64.b64decode(record['content']).decode('utf-8'))
+    except (ValueError, UnicodeError, KeyError):
+        raise HTTPException(502, 'Corrupt article metadata')
+
+    # Remove the article first, so it disappears from public listings even if
+    # attachment cleanup encounters an error.
+    _gh('DELETE', path, {
+        'message': f'insights: delete {category}/{slug}',
+        'sha': record['sha'], 'branch': BRANCH
+    })
+
+    attachment_removed = False
+    filename = article.get('file_name') or ''
+    if filename and re.fullmatch(r'[a-zA-Z0-9._-]{1,120}', filename):
+        file_path = f'{ROOT}/{category}/attachments/{slug}/{filename}'
+        try:
+            file_record = _gh('GET', file_path)
+            if file_record:
+                _gh('DELETE', file_path, {
+                    'message': f'insights: delete attachment {category}/{slug}/{filename}',
+                    'sha': file_record['sha'], 'branch': BRANCH
+                })
+                attachment_removed = True
+        except HTTPException:
+            # Article was deleted; return a truthful partial-success response.
+            return {'ok': True, 'article_deleted': True, 'attachment_deleted': False,
+                    'warning': 'Article deleted, but attachment cleanup failed. Remove the orphaned attachment from GitHub.'}
+    return {'ok': True, 'article_deleted': True, 'attachment_deleted': attachment_removed}
