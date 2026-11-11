@@ -96,7 +96,7 @@ export default function Research() {
       const response = await request(`/research/files?folder=${encodeURIComponent(target)}`);
       const data: { items?: StorageItem[] } = await response.json();
       setItems((data.items || []).filter(item =>
-        item.name !== '.folder' && item.name !== '.emptyFolderPlaceholder' && !item.name.endsWith('.lfarticle.json') && item.name !== '.lf-assets'
+        item.name !== '.folder' && item.name !== '.emptyFolderPlaceholder' && !item.name.endsWith('.lfarticle.json') && item.name !== '.lf-assets' && item.name !== '.lf-articles'
       ));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load files');
@@ -107,7 +107,7 @@ export default function Research() {
     const response = await request('/research/tree');
     const data: { items?: StorageItem[] } = await response.json();
     const result = (data.items || []).filter(item =>
-      item.name !== '.folder' && item.name !== '.emptyFolderPlaceholder' && !item.name.endsWith('.lfarticle.json') && item.name !== '.lf-assets'
+      item.name !== '.folder' && item.name !== '.emptyFolderPlaceholder' && !item.name.endsWith('.lfarticle.json') && item.name !== '.lf-assets' && item.name !== '.lf-articles'
     );
     setTree(result);
     return result;
@@ -317,8 +317,24 @@ export default function Research() {
       <h1 className="pagetitle">Research Library</h1>
       <p className="subtitle">Browse academic papers, trading strategies, research reports, and notes.</p>
 
-      <div className="panel" style={{ padding: 16, marginBottom: 16, display: 'flex',
-        justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      {!admin && showAdminLogin && <div className="panel"
+        style={{ padding: 20, marginBottom: 16, maxWidth: 460 }}>
+        <h2>Administrator Login</h2>
+        <p className="muted small">File management requires a password. Browsing is public.</p>
+        <form onSubmit={enterAdmin} style={{ display: 'grid', gap: 12, marginTop: 16 }}>
+          <input type="password" value={passwordInput} style={inputStyle} required
+            placeholder="Administrator password" autoComplete="off"
+            onChange={event => setPasswordInput(event.target.value)} />
+          <button type="submit" disabled={busy} style={buttonStyle}>
+            <LockKeyhole size={16} /> {busy ? 'Verifying...' : 'Enable Admin Mode'}
+          </button>
+        </form>
+      </div>}
+
+
+
+      <div className="panel" style={{ padding: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <Folder size={21} />
           <div><strong>Research Files</strong>
@@ -350,24 +366,6 @@ export default function Research() {
           }} />
         </div>
       </div>
-
-      {!admin && showAdminLogin && <div className="panel"
-        style={{ padding: 20, marginBottom: 16, maxWidth: 460 }}>
-        <h2>Administrator Login</h2>
-        <p className="muted small">File management requires a password. Browsing is public.</p>
-        <form onSubmit={enterAdmin} style={{ display: 'grid', gap: 12, marginTop: 16 }}>
-          <input type="password" value={passwordInput} style={inputStyle} required
-            placeholder="Administrator password" autoComplete="off"
-            onChange={event => setPasswordInput(event.target.value)} />
-          <button type="submit" disabled={busy} style={buttonStyle}>
-            <LockKeyhole size={16} /> {busy ? 'Verifying...' : 'Enable Admin Mode'}
-          </button>
-        </form>
-      </div>}
-
-
-
-      <div className="panel" style={{ padding: 16 }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
           <button type="button" style={buttonStyle} onClick={() => navigateTo('')}>
             <Home size={16} /> Home
