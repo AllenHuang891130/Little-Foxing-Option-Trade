@@ -36,7 +36,7 @@ origins = sorted(set(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_methods=["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "PUT", "PATCH", "OPTIONS"],
     allow_headers=["Content-Type", "X-Research-Password", "X-Insights-Admin-Key"],
 )
 plot_lock = threading.Lock()
