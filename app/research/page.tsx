@@ -1,4 +1,5 @@
 'use client';
+import ResearchArticles from './ResearchArticles';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, FormEvent } from 'react';
@@ -149,10 +150,7 @@ export default function Research() {
     try {
       await action();
       setMessage(success);
-      
-      await loadTree();
-      await load(folder);
-
+      await Promise.all([load(folder), loadTree()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Operation failed');
     } finally { setBusy(false); }
@@ -298,17 +296,11 @@ export default function Research() {
     }, `${folderItem ? 'Folder' : 'File'} deleted successfully.`);
   }
 
-  
   function navigateTo(path: string) {
+    setFolder(path);
     setSearch('');
     setMessage('');
-    setError('');
-    setFolder(path);
-  
-    // Always refresh, including when clicking Home at root.
-    void load(path);
   }
-
 
   const query = search.trim().toLocaleLowerCase();
   const visible: StorageItem[] = (query ? tree : items)
@@ -372,6 +364,8 @@ export default function Research() {
           </button>
         </form>
       </div>}
+
+      <ResearchArticles folder={folder} adminPassword={adminPassword} onChanged={() => { void load(folder); void loadTree(); }} />
 
       <div className="panel" style={{ padding: 16 }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
