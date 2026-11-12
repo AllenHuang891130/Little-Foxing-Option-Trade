@@ -1,4 +1,5 @@
 'use client';
+import StrategyArticles from './StrategyArticles';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, FormEvent } from 'react';
@@ -95,7 +96,7 @@ export default function Strategies() {
       const response = await request(`/strategy/files?folder=${encodeURIComponent(target)}`);
       const data: { items?: StorageItem[] } = await response.json();
       setItems((data.items || []).filter(item =>
-        item.name !== '.folder' && item.name !== '.emptyFolderPlaceholder'
+        item.name !== '.folder' && item.name !== '.emptyFolderPlaceholder' && !item.name.endsWith('.lfarticle.json') && item.name !== '.lf-assets' && item.name !== '.lf-articles'
       ));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load files');
@@ -106,7 +107,7 @@ export default function Strategies() {
     const response = await request('/strategy/tree');
     const data: { items?: StorageItem[] } = await response.json();
     const result = (data.items || []).filter(item =>
-      item.name !== '.folder' && item.name !== '.emptyFolderPlaceholder'
+      item.name !== '.folder' && item.name !== '.emptyFolderPlaceholder' && !item.name.endsWith('.lfarticle.json') && item.name !== '.lf-assets' && item.name !== '.lf-articles'
     );
     setTree(result);
     return result;
@@ -149,8 +150,7 @@ export default function Strategies() {
     try {
       await action();
       setMessage(success);
-      await loadTree();
-      await load(folder);
+      await Promise.all([load(folder), loadTree()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Operation failed');
     } finally { setBusy(false); }
@@ -297,11 +297,9 @@ export default function Strategies() {
   }
 
   function navigateTo(path: string) {
+    setFolder(path);
     setSearch('');
     setMessage('');
-    setError('');
-    setFolder(path);
-    void load(path);
   }
 
   const query = search.trim().toLocaleLowerCase();
@@ -315,43 +313,9 @@ export default function Strategies() {
 
   return (
     <>
-      <div className="eyebrow">EMPIRICAL RESEARCH / STRATEGIES</div>
+      <div className="eyebrow">TRADING / STRATEGIES</div>
       <h1 className="pagetitle">Strategy Lab</h1>
-      <p className="subtitle">Browse strategy code, backtests, performance reports, and research notes.</p>
-
-      <div className="panel" style={{ padding: 16, marginBottom: 16, display: 'flex',
-        justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Folder size={21} />
-          <div><strong>Strategy Files</strong>
-            <div className="muted small">{admin ? 'Administrator Access' : 'Public Access'}</div>
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {admin && <>
-            <button type="button" style={buttonStyle} disabled={busy} onClick={createFolder}>
-              <FolderPlus size={16} /> New Folder
-            </button>
-            <button type="button" style={buttonStyle} disabled={busy}
-              onClick={() => inputRef.current?.click()}><Upload size={16} /> Upload Files</button>
-          </>}
-          <button type="button" title="Refresh" style={iconButton} disabled={busy}
-            onClick={() => { void load(folder); void loadTree().catch(() => {}); }}>
-            <RefreshCw size={17} />
-          </button>
-          {admin ? <button type="button" style={buttonStyle} onClick={() => {
-            setAdminPassword(''); setPasswordInput(''); setMessage('Admin Mode disabled.');
-          }}><LogOut size={16} /> Exit Admin Mode</button> :
-            <button type="button" style={buttonStyle} onClick={() => {
-              setShowAdminLogin(value => !value); setError('');
-            }}><LockKeyhole size={16} /> Admin Mode</button>}
-          <input ref={inputRef} type="file" multiple hidden onChange={event => {
-            const selected = Array.from(event.target.files || []);
-            event.target.value = '';
-            uploadFiles(selected);
-          }} />
-        </div>
-      </div>
+      <p className="subtitle">Explore trading strategies, backtests, execution research, and implementation notes.</p>
 
       {!admin && showAdminLogin && <div className="panel"
         style={{ padding: 20, marginBottom: 16, maxWidth: 460 }}>
@@ -367,16 +331,49 @@ export default function Strategies() {
         </form>
       </div>}
 
+
+
       <div className="panel" style={{ padding: 16 }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
-          <button type="button" style={buttonStyle} onClick={() => navigateTo('')}>
-            <Home size={16} /> Home
-          </button>
-          {folder && <button type="button" style={buttonStyle}
-            onClick={() => navigateTo(parentPath(folder))}>
-            <ArrowLeft size={16} /> Back
-          </button>}
-          <span className="muted small">/ {folder || 'All Strategy Files'}</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
+            <button type="button" style={buttonStyle} onClick={() => navigateTo('')}>
+              <Home size={16} /> Home
+            </button>
+            {folder && <button type="button" style={buttonStyle}
+              onClick={() => navigateTo(parentPath(folder))}>
+              <ArrowLeft size={16} /> Back
+            </button>}
+            <span className="muted small" style={{ overflowWrap: 'anywhere' }}>
+              / {folder || 'All Strategy Files'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginLeft: 'auto' }}>
+            {admin && <>
+              <button type="button" style={buttonStyle} disabled={busy} onClick={createFolder}>
+                <FolderPlus size={16} /> New Folder
+              </button>
+              <button type="button" style={buttonStyle} disabled={busy}
+                onClick={() => inputRef.current?.click()}>
+                <Upload size={16} /> Upload Files
+              </button>
+            </>}
+            <button type="button" title="Refresh" style={iconButton} disabled={busy}
+              onClick={() => { void load(folder); void loadTree().catch(() => {}); }}>
+              <RefreshCw size={17} />
+            </button>
+            {admin ? <button type="button" style={buttonStyle} onClick={() => {
+              setAdminPassword(''); setPasswordInput(''); setMessage('Admin Mode disabled.');
+            }}><LogOut size={16} /> Exit Admin Mode</button> :
+              <button type="button" style={buttonStyle} onClick={() => {
+                setShowAdminLogin(value => !value); setError('');
+              }}><LockKeyhole size={16} /> Admin Mode</button>}
+            <input ref={inputRef} type="file" multiple hidden onChange={event => {
+              const selected = Array.from(event.target.files || []);
+              event.target.value = '';
+              uploadFiles(selected);
+            }} />
+          </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
           border: '1px solid var(--border, #8885)', borderRadius: 9, marginBottom: 8 }}>
@@ -392,10 +389,7 @@ export default function Strategies() {
         {error && <p style={{ color: '#dc5252', marginBottom: 12, overflowWrap: 'anywhere' }}>{error}</p>}
         {message && <p style={{ marginBottom: 12 }}>{message}</p>}
         {busy && <p className="muted small">Loading...</p>}
-        {!busy && visible.length === 0 && <div style={{ textAlign: 'center', padding: 40 }}>
-          <Folder size={32} style={{ opacity: .5 }} />
-          <p>{query ? 'No matching results' : 'This folder is empty'}</p>
-        </div>}
+        
         <div style={{ display: 'grid', gap: 8 }}>
           {visible.map(item => {
             const path = item.path || joinPath(folder, item.name);
@@ -429,6 +423,9 @@ export default function Strategies() {
             </div>;
           })}
         </div>
+        <StrategyArticles folder={folder} adminPassword={adminPassword}
+          hasOtherItems={visible.length > 0}
+          onChanged={() => { void load(folder); void loadTree(); }} />
       </div>
 
       {preview && <div role="dialog" aria-modal="true" aria-label="PDF preview"
