@@ -1,5 +1,5 @@
 'use client';
-import {useRef, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 import {RefreshCcw, Play, Info} from 'lucide-react';
 
 type Mode='single'|'compare'|'cross'|'inst'|'daynight'|'poc'|'gamma';
@@ -26,6 +26,58 @@ function initialWorkspaces():Workspaces{
  const poc=initialWorkspace();poc.settings.expiry='AUTO';
  return {single:initialWorkspace(),compare:initialWorkspace(),cross:initialWorkspace(),inst:initialWorkspace(),daynight:initialWorkspace(),poc,gamma:initialWorkspace()};
 }
+// Keep successful analysis in memory while navigating between Next.js pages.
+// A reload starts a fresh workspace. sessionStorage is a best-effort fallback
+// when the page module is re-evaluated during client navigation.
+const WORKSPACE_CACHE_KEY = 'lf-options-workspaces-v1';
+let memoryWorkspaces: Workspaces | null = null;
+
+function restoreWorkspaces(): Workspaces {
+  if (typeof window === 'undefined') return initialWorkspaces();
+  const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+  const pageWindow = window as Window & { __lfOptionsCacheChecked?: boolean };
+  if (!pageWindow.__lfOptionsCacheChecked) {
+    pageWindow.__lfOptionsCacheChecked = true;
+    if (navigation?.type === 'reload') {
+      try { sessionStorage.removeItem(WORKSPACE_CACHE_KEY); } catch { /* storage unavailable */ }
+      memoryWorkspaces = null;
+      return initialWorkspaces();
+    }
+  }
+  if (memoryWorkspaces) return memoryWorkspaces;
+  try {
+    const raw = sessionStorage.getItem(WORKSPACE_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<Workspaces>;
+      const defaults = initialWorkspaces();
+      for (const mode of Object.keys(defaults) as Mode[]) {
+        const previous = parsed[mode];
+        if (previous && previous.settings) {
+          defaults[mode] = {
+            ...defaults[mode],
+            ...previous,
+            settings: { ...defaults[mode].settings, ...previous.settings },
+            busy: false,
+          };
+        }
+      }
+      memoryWorkspaces = defaults;
+      return defaults;
+    }
+  } catch { /* invalid or unavailable storage */ }
+  return initialWorkspaces();
+}
+
+function saveWorkspaces(value: Workspaces): void {
+  memoryWorkspaces = value;
+  if (typeof window === 'undefined') return;
+  try {
+    // Base64 chart images may exceed the browser's storage quota. Memory cache
+    // still preserves them during ordinary client-side navigation.
+    sessionStorage.setItem(WORKSPACE_CACHE_KEY, JSON.stringify(value));
+  } catch { /* quota exceeded: in-memory cache remains available */ }
+}
+
 function apiBase(){
  const configured=process.env.NEXT_PUBLIC_API_BASE_URL?.trim().replace(/\/$/,'');
  return configured||'http://localhost:8000';
@@ -304,7 +356,8 @@ function sortCharts(charts:LegacyChart[],mode:Mode):LegacyChart[]{
 
 export default function Options(){
  const [mode,setMode]=useState<Mode>('daynight');
- const [workspaces,setWorkspaces]=useState<Workspaces>(initialWorkspaces);
+ const [workspaces,setWorkspaces]=useState<Workspaces>(restoreWorkspaces);
+  useEffect(()=>{saveWorkspaces(workspaces);},[workspaces]);
  const workspacesRef=useRef(workspaces);
  const update=(target:Mode,change:(previous:Workspace)=>Workspace)=>{
   const next={...workspacesRef.current,[target]:change(workspacesRef.current[target])};
