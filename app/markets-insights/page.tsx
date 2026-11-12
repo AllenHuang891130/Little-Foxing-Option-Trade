@@ -1,9 +1,9 @@
+
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import './markdown.css';
 import {
   BookOpen,
   CalendarDays,
@@ -13,11 +13,18 @@ import {
   Search,
   RefreshCw,
   ExternalLink,
-  ChevronDown,
+  ChevronRight,
   Trash2,
 } from 'lucide-react';
+import './markdown.css';
+
+// ============================================================
+// Little Foxing | Markets
+// Compact English UI + Responsive Layout
+// ============================================================
 
 type Category = 'daily' | 'bonds' | 'research';
+type Tab = Category | 'all';
 
 type Article = {
   slug: string;
@@ -35,10 +42,7 @@ const API = (
   'https://little-foxing-option-trade.onrender.com'
 ).replace(/\/$/, '');
 
-const tabs: {
-  key: Category | 'all';
-  label: string;
-}[] = [
+const tabs: { key: Tab; label: string }[] = [
   { key: 'all', label: 'All Insights' },
   { key: 'daily', label: 'Daily Brief' },
   { key: 'bonds', label: 'Bond Weekly' },
@@ -46,88 +50,129 @@ const tabs: {
 ];
 
 const panel: React.CSSProperties = {
-  border: '1px solid var(--border,#8884)',
-  borderRadius: 14,
-  padding: 18,
-  background: 'var(--card,transparent)',
+  border: '1px solid var(--border, #d7d0c3)',
+  borderRadius: 8,
+  background: 'var(--card, transparent)',
 };
 
 const field: React.CSSProperties = {
   width: '100%',
-  padding: '11px 12px',
-  border: '1px solid var(--border,#8885)',
-  borderRadius: 9,
+  minWidth: 0,
+  padding: '10px 12px',
+  border: '1px solid var(--border, #d7d0c3)',
+  borderRadius: 6,
   background: 'transparent',
   color: 'inherit',
+  fontSize: 13,
+  boxSizing: 'border-box',
 };
 
 const btn: React.CSSProperties = {
-  padding: '10px 15px',
-  border: '1px solid var(--border,#8885)',
-  borderRadius: 9,
+  padding: '9px 13px',
+  border: '1px solid var(--border, #d7d0c3)',
+  borderRadius: 6,
   background: 'transparent',
   color: 'inherit',
   cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 7,
+  fontSize: 13,
 };
 
-function errorMessage(e: unknown) {
+const labelStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+  fontSize: 13,
+};
+
+function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-async function readJson(url: string, init?: RequestInit) {
-  const r = await fetch(url, { cache: 'no-store', ...init });
-  const j = await r.json().catch(() => ({}));
+async function readJson(
+  url: string,
+  init?: RequestInit
+): Promise<any> {
+  const response = await fetch(url, {
+    cache: 'no-store',
+    ...init,
+  });
 
-  if (!r.ok) {
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
     throw new Error(
-      typeof j.detail === 'string'
-        ? j.detail
-        : `HTTP ${r.status}`
+      typeof data.detail === 'string'
+        ? data.detail
+        : `Request failed (HTTP ${response.status})`
     );
   }
 
-  return j;
+  return data;
 }
 
 function toBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
 
-    reader.onload = () =>
-      resolve(String(reader.result).split(',')[1] || '');
+    reader.onload = () => {
+      resolve(
+        String(reader.result).split(',')[1] || ''
+      );
+    };
 
-    reader.onerror = () =>
-      reject(new Error('無法讀取檔案'));
+    reader.onerror = () => {
+      reject(new Error('Unable to read the selected file.'));
+    };
 
     reader.readAsDataURL(file);
   });
 }
 
+function categoryLabel(category: Category): string {
+  if (category === 'daily') return 'DAILY BRIEF';
+  if (category === 'bonds') return 'BOND WEEKLY';
+  return 'RESEARCH';
+}
+
 export default function MarketsInsightsPage() {
-  const [tab, setTab] = useState<Category | 'all'>('all');
+  // ----------------------------------------------------------
+  // State
+  // ----------------------------------------------------------
+
+  const [tab, setTab] = useState<Tab>('all');
   const [articles, setArticles] = useState<Article[]>([]);
   const [selected, setSelected] = useState<Article | null>(null);
 
   const [loading, setLoading] = useState(true);
+  const [opening, setOpening] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [showPublish, setShowPublish] = useState(false);
 
   const [key, setKey] = useState('');
-  const [category, setCategory] = useState<Category>('research');
+  const [category, setCategory] =
+    useState<Category>('research');
+
   const [title, setTitle] = useState('');
   const [date, setDate] = useState(
     new Date().toLocaleDateString('en-CA')
   );
 
-  const [deleteKey, setDeleteKey] = useState('');
-  const [deleting, setDeleting] = useState(false);
-  const [deleteNotice, setDeleteNotice] = useState('');
-
   const [summary, setSummary] = useState('');
   const [content, setContent] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const [deleteKey, setDeleteKey] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteNotice, setDeleteNotice] = useState('');
+
+  // ----------------------------------------------------------
+  // Load articles
+  // ----------------------------------------------------------
 
   async function reload() {
     setLoading(true);
@@ -137,7 +182,12 @@ export default function MarketsInsightsPage() {
       const data = await readJson(
         `${API}/api/insights/articles`
       );
-      setArticles(data.articles || []);
+
+      setArticles(
+        Array.isArray(data.articles)
+          ? data.articles
+          : []
+      );
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -149,79 +199,58 @@ export default function MarketsInsightsPage() {
     void reload();
   }, []);
 
-  const shown = useMemo(
-    () =>
-      articles.filter(
-        a =>
-          (tab === 'all' || a.category === tab) &&
-          `${a.title} ${a.summary} ${a.date}`
-            .toLowerCase()
-            .includes(search.toLowerCase())
-      ),
-    [articles, tab, search]
-  );
+  // ----------------------------------------------------------
+  // Filter
+  // ----------------------------------------------------------
 
-  async function openArticle(a: Article) {
+  const shown = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    return articles.filter(article => {
+      const categoryMatches =
+        tab === 'all' || article.category === tab;
+
+      const searchMatches =
+        `${article.title} ${article.summary} ${article.date}`
+          .toLowerCase()
+          .includes(query);
+
+      return categoryMatches && searchMatches;
+    });
+  }, [articles, tab, search]);
+
+  // ----------------------------------------------------------
+  // Read article
+  // ----------------------------------------------------------
+
+  async function openArticle(article: Article) {
     setError('');
+    setOpening(true);
 
     try {
       const full = await readJson(
-        `${API}/api/insights/articles/${a.category}/${encodeURIComponent(a.slug)}`
+        `${API}/api/insights/articles/${
+          article.category
+        }/${encodeURIComponent(article.slug)}`
       );
+
       setSelected(full);
     } catch (e) {
       setError(errorMessage(e));
-    }
-  }
-
-  async function deleteArticle() {
-    if (!selected) return;
-
-    if (!deleteKey.trim()) {
-      setError('請先輸入管理密鑰才能刪除文章');
-      return;
-    }
-
-    if (
-      !window.confirm(
-        `確定要永久刪除「${selected.title}」嗎？\n此操作會刪除 GitHub 上的文章與附件（如有），且無法從網站復原。`
-      )
-    ) {
-      return;
-    }
-
-    setDeleting(true);
-    setError('');
-    setDeleteNotice('');
-
-    try {
-      const result = await readJson(
-        `${API}/api/insights/articles/${selected.category}/${encodeURIComponent(selected.slug)}`,
-        {
-          method: 'DELETE',
-          headers: {
-            'X-Insights-Admin-Key': deleteKey,
-          },
-        }
-      );
-
-      setDeleteKey('');
-      setSelected(null);
-      setDeleteNotice(result.warning || '文章已刪除。');
-
-      await reload();
-    } catch (e) {
-      setError(errorMessage(e));
     } finally {
-      setDeleting(false);
+      setOpening(false);
     }
   }
+
+  // ----------------------------------------------------------
+  // Publish
+  // ----------------------------------------------------------
 
   async function publish(e: React.FormEvent) {
     e.preventDefault();
 
     if (!key.trim()) {
-      setError('請輸入管理密鑰');
+      setError('Please enter your admin key.');
       return;
     }
 
@@ -230,7 +259,9 @@ export default function MarketsInsightsPage() {
 
     try {
       if (file && file.size > 8 * 1024 * 1024) {
-        throw new Error('附件不可超過 8 MB');
+        throw new Error(
+          'The attachment must not exceed 8 MB.'
+        );
       }
 
       const file_base64 = file
@@ -268,80 +299,393 @@ export default function MarketsInsightsPage() {
     }
   }
 
+  // ----------------------------------------------------------
+  // Delete
+  // ----------------------------------------------------------
+
+  async function deleteArticle() {
+    if (!selected) return;
+
+    if (!deleteKey.trim()) {
+      setError('Please enter your admin key.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Permanently delete "${selected.title}"?\n\n` +
+      'The article and its attachment will be deleted ' +
+      'from GitHub. This action cannot be undone from ' +
+      'the website.'
+    );
+
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setError('');
+    setDeleteNotice('');
+
+    try {
+      const result = await readJson(
+        `${API}/api/insights/articles/${
+          selected.category
+        }/${encodeURIComponent(selected.slug)}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'X-Insights-Admin-Key': deleteKey,
+          },
+        }
+      );
+
+      setDeleteKey('');
+      setSelected(null);
+
+      setDeleteNotice(
+        result.warning || 'Article deleted successfully.'
+      );
+
+      await reload();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  // ----------------------------------------------------------
+  // Render
+  // ----------------------------------------------------------
+
   return (
-    <main
-      style={{
-        maxWidth: 1240,
-        margin: '0 auto',
-        padding: '32px 24px 80px',
-        color: 'inherit',
-      }}
-    >
-      <header
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          gap: 16,
-          alignItems: 'start',
-          flexWrap: 'wrap',
-          marginBottom: 28,
-        }}
-      >
+    <main className="lf-markets">
+      <style>{`
+        .lf-markets {
+          width: 100%;
+          max-width: 1240px;
+          margin: 0 auto;
+          padding: 24px 16px 72px;
+          box-sizing: border-box;
+          min-width: 0;
+        }
+
+        .lf-markets *,
+        .lf-markets *::before,
+        .lf-markets *::after {
+          box-sizing: border-box;
+        }
+
+        .lf-markets-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          flex-wrap: wrap;
+          gap: 16px;
+          margin-bottom: 26px;
+        }
+
+        .lf-markets-eyebrow {
+          font-size: 11px;
+          letter-spacing: 1.8px;
+          opacity: 0.6;
+          margin-bottom: 6px;
+        }
+
+        .lf-markets-title {
+          font-size: clamp(28px, 4vw, 36px);
+          line-height: 1.2;
+          margin: 0;
+        }
+
+        .lf-markets-subtitle {
+          font-size: 13px;
+          opacity: 0.65;
+          margin: 7px 0 0;
+          line-height: 1.6;
+        }
+
+        .lf-markets-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .lf-markets-tabs {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 8px;
+          margin-bottom: 24px;
+        }
+
+        .lf-markets-tab {
+          width: 100%;
+          min-width: 0;
+          min-height: 44px;
+          padding: 9px 12px;
+          border: 1px solid var(--border, #d7d0c3);
+          border-radius: 6px;
+          background: transparent;
+          color: inherit;
+          font-family: inherit;
+          font-size: 13px;
+          font-weight: 600;
+          text-align: center;
+          cursor: pointer;
+          transition: background 0.2s, border-color 0.2s;
+        }
+
+        .lf-markets-tab:hover {
+          background: rgba(110, 100, 85, 0.08);
+        }
+
+        .lf-markets-tab.active {
+          background: #746e64;
+          border-color: #746e64;
+          color: #fffdf8;
+        }
+
+        .lf-markets-section-heading {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 12px;
+          margin-bottom: 18px;
+        }
+
+        .lf-markets-search {
+          width: min(100%, 280px);
+          position: relative;
+        }
+
+        .lf-markets-search-icon {
+          position: absolute;
+          left: 11px;
+          top: 50%;
+          transform: translateY(-50%);
+          opacity: 0.5;
+          pointer-events: none;
+        }
+
+        .lf-markets-search input {
+          padding-left: 35px !important;
+        }
+
+        .lf-markets-grid {
+          display: grid;
+          grid-template-columns:
+            repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+          gap: 14px;
+        }
+
+        .lf-markets-article-card {
+          width: 100%;
+          min-width: 0;
+          min-height: 190px;
+          padding: 17px;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          text-align: left;
+          color: inherit;
+          cursor: pointer;
+          font-family: inherit;
+          overflow-wrap: anywhere;
+          transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .lf-markets-article-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 15px rgba(0,0,0,0.06);
+        }
+
+        .lf-markets-article-card h3 {
+          font-size: 18px;
+          line-height: 1.45;
+          margin: 0;
+        }
+
+        .lf-markets-article-card p {
+          font-size: 13px;
+          line-height: 1.7;
+          opacity: 0.65;
+          margin: 0;
+          flex: 1;
+          overflow-wrap: anywhere;
+        }
+
+        .lf-markets-editor {
+          display: grid;
+          gap: 13px;
+          padding: 20px;
+          margin-bottom: 24px;
+        }
+
+        .lf-markets-editor-columns {
+          display: grid;
+          grid-template-columns:
+            repeat(2, minmax(0, 1fr));
+          gap: 12px;
+        }
+
+        .lf-markets-reader {
+          padding: clamp(18px, 4vw, 45px);
+          min-width: 0;
+          overflow-wrap: anywhere;
+        }
+
+        .lf-markets-reader h2 {
+          font-size: clamp(24px, 4vw, 34px);
+          line-height: 1.4;
+          overflow-wrap: anywhere;
+        }
+
+        .lf-markets-reader .insights-markdown {
+          min-width: 0;
+          overflow-wrap: anywhere;
+        }
+
+        .lf-markets-reader img {
+          max-width: 100%;
+          height: auto;
+        }
+
+        .lf-markets-reader pre {
+          max-width: 100%;
+          overflow-x: auto;
+        }
+
+        .lf-markets-reader .table-scroll {
+          max-width: 100%;
+          overflow-x: auto;
+        }
+
+        .lf-markets-reader iframe {
+          max-width: 100%;
+        }
+
+        .lf-markets-status {
+          font-size: 13px;
+          line-height: 1.7;
+          opacity: 0.7;
+          padding: 12px 0;
+        }
+
+        .lf-markets button:focus-visible,
+        .lf-markets input:focus-visible,
+        .lf-markets textarea:focus-visible,
+        .lf-markets select:focus-visible {
+          outline: 2px solid #9a7048;
+          outline-offset: 2px;
+        }
+
+        @media (max-width: 680px) {
+          .lf-markets {
+            padding: 18px 12px 90px;
+          }
+
+          .lf-markets-header {
+            margin-bottom: 20px;
+          }
+
+          .lf-markets-tabs {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 7px;
+          }
+
+          .lf-markets-tab {
+            min-height: 42px;
+            padding: 8px 6px;
+            font-size: 12px;
+          }
+
+          .lf-markets-section-heading {
+            align-items: stretch;
+          }
+
+          .lf-markets-search {
+            width: 100%;
+          }
+
+          .lf-markets-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .lf-markets-article-card {
+            min-height: 0;
+          }
+
+          .lf-markets-editor-columns {
+            grid-template-columns: 1fr;
+          }
+
+          .lf-markets-editor {
+            padding: 14px;
+          }
+
+          .lf-markets-reader {
+            padding: 16px;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .lf-markets-tab,
+          .lf-markets-article-card {
+            transition: none;
+          }
+        }
+      `}</style>
+
+      {/* Header */}
+
+      <header className="lf-markets-header">
         <div>
-          <div
-            style={{
-              fontSize: 12,
-              letterSpacing: 2,
-              opacity: 0.55,
-              marginBottom: 7,
-            }}
-          >
+          <div className="lf-markets-eyebrow">
             LITTLE FOXING / RESEARCH CENTER
           </div>
 
-          <h1
-            style={{
-              fontSize: 32,
-              fontWeight: 700,
-              margin: 0,
-            }}
-          >
+          <h1 className="lf-markets-title">
             Markets
           </h1>
 
-          <p style={{ opacity: 0.65, marginTop: 8 }}>
+          <p className="lf-markets-subtitle">
             Daily intelligence · Fixed income · Independent research
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="lf-markets-actions">
           <button
+            type="button"
             style={btn}
             onClick={() => void reload()}
-            aria-label="重新整理"
+            aria-label="Refresh publications"
+            title="Refresh publications"
           >
-            <RefreshCw size={17} />
+            <RefreshCw size={16} />
           </button>
 
           <button
+            type="button"
             style={btn}
             onClick={() => setShowPublish(v => !v)}
+            aria-expanded={showPublish}
           >
-            <Upload
-              size={15}
-              style={{
-                display: 'inline',
-                verticalAlign: 'middle',
-                marginRight: 7,
-              }}
-            />
+            <Upload size={15} />
             Publish / Upload
           </button>
         </div>
       </header>
 
+      {/* Notifications */}
+
       {deleteNotice && (
-        <div role="status" style={{ ...panel, marginBottom: 18 }}>
+        <div
+          role="status"
+          style={{
+            ...panel,
+            padding: 14,
+            marginBottom: 18,
+          }}
+        >
           {deleteNotice}
         </div>
       )}
@@ -351,44 +695,46 @@ export default function MarketsInsightsPage() {
           role="alert"
           style={{
             ...panel,
-            borderColor: '#d97777',
+            padding: 14,
             marginBottom: 18,
-            color: '#dc6868',
+            borderColor: '#b94b4b',
+            color: '#b94b4b',
+            overflowWrap: 'anywhere',
           }}
         >
           {error}
         </div>
       )}
 
+      {/* Publish form */}
+
       {showPublish && (
         <form
+          className="lf-markets-editor"
+          style={panel}
           onSubmit={publish}
-          style={{
-            ...panel,
-            marginBottom: 26,
-            display: 'grid',
-            gap: 12,
-          }}
         >
-          <h2 style={{ fontSize: 18, margin: 0 }}>
-            發布研究內容
+          <h2 style={{ fontSize: 19, margin: 0 }}>
+            Publish Article
           </h2>
 
-          <p style={{ fontSize: 13, opacity: 0.65, margin: 0 }}>
-            公開閱讀，只有持有管理密鑰者可以發布。
-            附件限制 8 MB（PDF、DOCX、MD、TXT）。
-          </p>
-
-          <div
+          <p
             style={{
-              display: 'grid',
-              gridTemplateColumns:
-                'repeat(auto-fit,minmax(190px,1fr))',
-              gap: 12,
+              fontSize: 13,
+              opacity: 0.65,
+              lineHeight: 1.7,
+              margin: 0,
             }}
           >
-            <label>
-              分類
+            Articles are publicly accessible.
+            Publishing requires an admin key.
+            Attachments are limited to 8 MB
+            (PDF, DOCX, MD, TXT).
+          </p>
+
+          <div className="lf-markets-editor-columns">
+            <label style={labelStyle}>
+              Category
               <select
                 style={field}
                 value={category}
@@ -402,8 +748,8 @@ export default function MarketsInsightsPage() {
               </select>
             </label>
 
-            <label>
-              日期
+            <label style={labelStyle}>
+              Date
               <input
                 style={field}
                 type="date"
@@ -414,42 +760,42 @@ export default function MarketsInsightsPage() {
             </label>
           </div>
 
-          <label>
-            標題
+          <label style={labelStyle}>
+            Title
             <input
               style={field}
               required
               maxLength={200}
               value={title}
               onChange={e => setTitle(e.target.value)}
-              placeholder="輸入文章標題"
+              placeholder="Enter article title..."
             />
           </label>
 
-          <label>
-            摘要
+          <label style={labelStyle}>
+            Summary
             <textarea
               style={field}
               rows={2}
               value={summary}
               onChange={e => setSummary(e.target.value)}
-              placeholder="簡短摘要"
+              placeholder="Write a short summary..."
             />
           </label>
 
-          <label>
-            內文（純文字或 Markdown）
+          <label style={labelStyle}>
+            Content (Markdown supported)
             <textarea
               style={field}
               rows={9}
               value={content}
               onChange={e => setContent(e.target.value)}
-              placeholder="在此撰寫研究觀點，也可以只附上檔案"
+              placeholder="Write your article in Markdown..."
             />
           </label>
 
-          <label>
-            附件
+          <label style={labelStyle}>
+            Attachment
             <input
               style={{ ...field, padding: 8 }}
               type="file"
@@ -460,8 +806,8 @@ export default function MarketsInsightsPage() {
             />
           </label>
 
-          <label>
-            管理密鑰
+          <label style={labelStyle}>
+            Admin Key
             <input
               style={field}
               type="password"
@@ -469,74 +815,70 @@ export default function MarketsInsightsPage() {
               autoComplete="off"
               value={key}
               onChange={e => setKey(e.target.value)}
-              placeholder="只用於本次發布，不儲存在瀏覽器"
+              placeholder="Enter your admin key..."
             />
           </label>
 
           <div>
             <button
-              style={{
-                ...btn,
-                background: 'var(--foreground,#222)',
-                color: 'var(--background,#fff)',
-              }}
               type="submit"
               disabled={saving}
+              style={{
+                ...btn,
+                background: '#393126',
+                color: '#fffdf8',
+                opacity: saving ? 0.6 : 1,
+              }}
             >
-              {saving ? '正在發布…' : 'Publish Article'}
+              {saving ? 'Publishing...' : 'Publish Article'}
             </button>
           </div>
         </form>
       )}
 
+      {/* Article reader */}
+
       {selected ? (
         <section>
           <button
-            style={{ ...btn, marginBottom: 22 }}
-            onClick={() => setSelected(null)}
+            type="button"
+            style={{
+              ...btn,
+              marginBottom: 18,
+            }}
+            onClick={() => {
+              setSelected(null);
+              setError('');
+            }}
           >
-            <ArrowLeft
-              size={16}
-              style={{
-                display: 'inline',
-                verticalAlign: 'middle',
-                marginRight: 7,
-              }}
-            />
-            返回文章列表
+            <ArrowLeft size={15} />
+            Back to Publications
           </button>
 
           <article
-            style={{
-              ...panel,
-              padding: 'clamp(20px,4vw,50px)',
-            }}
+            className="lf-markets-reader"
+            style={panel}
           >
             <div
               style={{
-                fontSize: 12,
-                letterSpacing: 1.4,
-                opacity: 0.55,
+                fontSize: 11,
+                letterSpacing: 1.3,
+                opacity: 0.6,
               }}
             >
-              {selected.category.toUpperCase()} · {selected.date}
+              {categoryLabel(selected.category)} · {selected.date}
             </div>
 
-            <h2
-              style={{
-                fontSize: 30,
-                margin: '14px 0',
-              }}
-            >
+            <h2 style={{ margin: '14px 0' }}>
               {selected.title}
             </h2>
 
             {selected.summary && (
               <p
                 style={{
-                  opacity: 0.7,
-                  fontSize: 17,
+                  fontSize: 16,
                   lineHeight: 1.8,
+                  opacity: 0.7,
                 }}
               >
                 {selected.summary}
@@ -546,7 +888,8 @@ export default function MarketsInsightsPage() {
             <hr
               style={{
                 border: 0,
-                borderTop: '1px solid var(--border,#8884)',
+                borderTop:
+                  '1px solid var(--border, #d7d0c3)',
                 margin: '24px 0',
               }}
             />
@@ -562,7 +905,8 @@ export default function MarketsInsightsPage() {
                   ),
                 }}
               >
-                {selected.content || '本文附於下方檔案。'}
+                {selected.content ||
+                  'The full content is available in the attachment below.'}
               </ReactMarkdown>
             </div>
 
@@ -575,12 +919,16 @@ export default function MarketsInsightsPage() {
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
+                    flexWrap: 'wrap',
                     gap: 7,
                     textDecoration: 'underline',
+                    overflowWrap: 'anywhere',
                   }}
                 >
                   <FileText size={17} />
-                  查看／下載附件：{selected.file_name}
+                  View / Download Attachment:
+                  {' '}
+                  {selected.file_name}
                   <ExternalLink size={14} />
                 </a>
 
@@ -588,15 +936,15 @@ export default function MarketsInsightsPage() {
                   ?.toLowerCase()
                   .endsWith('.pdf') && (
                   <iframe
-                    title="PDF 附件預覽"
+                    title="PDF attachment preview"
                     src={selected.file_url}
                     style={{
                       width: '100%',
-                      height: 650,
+                      height: 'min(70vh, 650px)',
                       marginTop: 16,
                       border:
-                        '1px solid var(--border,#8885)',
-                      borderRadius: 8,
+                        '1px solid var(--border, #d7d0c3)',
+                      borderRadius: 6,
                     }}
                   />
                 )}
@@ -604,16 +952,19 @@ export default function MarketsInsightsPage() {
             )}
           </article>
 
+          {/* Delete article */}
+
           <div
             style={{
               ...panel,
               marginTop: 18,
+              padding: 18,
               display: 'grid',
-              gap: 10,
+              gap: 12,
             }}
           >
             <h3 style={{ fontSize: 16, margin: 0 }}>
-              文章管理
+              Article Management
             </h3>
 
             <p
@@ -621,14 +972,16 @@ export default function MarketsInsightsPage() {
                 fontSize: 13,
                 opacity: 0.65,
                 margin: 0,
+                lineHeight: 1.7,
               }}
             >
-              刪除需要管理密鑰，並會再次要求確認。
-              一般讀者無法在沒有密鑰的情況下刪除。
+              Deleting an article requires an admin key
+              and confirmation. This action cannot be
+              undone from the website.
             </p>
 
-            <label>
-              管理密鑰
+            <label style={labelStyle}>
+              Admin Key
               <input
                 style={field}
                 type="password"
@@ -637,95 +990,60 @@ export default function MarketsInsightsPage() {
                 onChange={e =>
                   setDeleteKey(e.target.value)
                 }
-                placeholder="輸入管理密鑰以刪除這篇文章"
+                placeholder="Enter admin key to delete..."
               />
             </label>
 
             <div>
               <button
                 type="button"
+                disabled={deleting}
+                onClick={() => void deleteArticle()}
                 style={{
                   ...btn,
                   borderColor: '#b94b4b',
-                  color: '#d65c5c',
+                  color: '#b94b4b',
+                  opacity: deleting ? 0.6 : 1,
                 }}
-                disabled={deleting}
-                onClick={() => void deleteArticle()}
               >
-                <Trash2
-                  size={15}
-                  style={{
-                    display: 'inline',
-                    verticalAlign: 'middle',
-                    marginRight: 7,
-                  }}
-                />
+                <Trash2 size={15} />
                 {deleting
-                  ? '正在刪除…'
-                  : '刪除這篇文章'}
+                  ? 'Deleting...'
+                  : 'Delete Article'}
               </button>
             </div>
           </div>
         </section>
       ) : (
         <>
+          {/* Compact category tabs */}
+
           <nav
-            style={{
-              display: 'grid',
-              gridTemplateColumns:
-                'repeat(auto-fit,minmax(170px,1fr))',
-              gap: 10,
-              marginBottom: 24,
-            }}
+            className="lf-markets-tabs"
+            aria-label="Publication categories"
           >
-            {tabs.map(t => (
+            {tabs.map(item => (
               <button
-                key={t.key}
-                onClick={() => setTab(t.key)}
-                style={{
-                  ...panel,
-                  textAlign: 'left',
-                  cursor: 'pointer',
-                  minHeight: 58,
-                  display: 'flex',
-                  alignItems: 'center',
-                  borderColor:
-                    tab === t.key
-                      ? 'var(--foreground,#aaa)'
-                      : 'var(--border,#8884)',
-                  background:
-                    tab === t.key
-                      ? 'var(--muted,#8881)'
-                      : 'transparent',
-                }}
+                key={item.key}
+                type="button"
+                className={
+                  'lf-markets-tab' +
+                  (tab === item.key ? ' active' : '')
+                }
+                aria-pressed={tab === item.key}
+                onClick={() => setTab(item.key)}
               >
-                <div
-                  style={{
-                    fontSize: 14,
-                    fontWeight: 650,
-                  }}
-                >
-                  {t.label}
-                </div>
-
-
+                {item.label}
               </button>
             ))}
           </nav>
 
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              gap: 14,
-              marginBottom: 20,
-              flexWrap: 'wrap',
-            }}
-          >
+          {/* Search and heading */}
+
+          <div className="lf-markets-section-heading">
             <h2
               style={{
-                fontSize: 19,
+                fontSize: 20,
                 margin: 0,
               }}
             >
@@ -740,146 +1058,125 @@ export default function MarketsInsightsPage() {
               </span>
             </h2>
 
-            <div
-              style={{
-                position: 'relative',
-                minWidth: 230,
-              }}
-            >
+            <div className="lf-markets-search">
               <Search
                 size={15}
-                style={{
-                  position: 'absolute',
-                  left: 11,
-                  top: 12,
-                  opacity: 0.5,
-                }}
+                className="lf-markets-search-icon"
               />
 
               <input
-                style={{
-                  ...field,
-                  paddingLeft: 35,
-                }}
-                placeholder="搜尋標題、摘要、日期"
+                style={field}
+                type="search"
+                aria-label="Search publications"
+                placeholder="Search titles, summaries, or dates..."
                 value={search}
-                onChange={e =>
-                  setSearch(e.target.value)
-                }
+                onChange={e => setSearch(e.target.value)}
               />
             </div>
           </div>
 
+          {/* Loading */}
+
           {loading ? (
-            <p style={{ opacity: 0.65 }}>
-              正在載入文章…
+            <p
+              className="lf-markets-status"
+              role="status"
+            >
+              Loading publications...
+            </p>
+          ) : opening ? (
+            <p
+              className="lf-markets-status"
+              role="status"
+            >
+              Opening article...
             </p>
           ) : shown.length === 0 ? (
             <div
               style={{
                 ...panel,
+                padding: '35px 18px',
                 textAlign: 'center',
-                padding: 50,
               }}
             >
               <BookOpen
-                size={32}
+                size={29}
                 style={{
-                  margin: 'auto',
+                  margin: '0 auto 10px',
                   opacity: 0.4,
                 }}
               />
 
-              <h3>目前沒有符合條件的文章</h3>
+              <h3
+                style={{
+                  fontSize: 17,
+                  marginBottom: 8,
+                }}
+              >
+                {search.trim()
+                  ? 'No matching publications found.'
+                  : 'No publications yet.'}
+              </h3>
 
-              <p style={{ opacity: 0.6 }}>
-                可以使用 Publish / Upload
-                發布第一篇內容。
+              <p
+                style={{
+                  fontSize: 13,
+                  opacity: 0.6,
+                  lineHeight: 1.7,
+                }}
+              >
+                {search.trim()
+                  ? 'Try another keyword or date.'
+                  : 'Use Publish / Upload to add your first article.'}
               </p>
             </div>
           ) : (
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns:
-                  'repeat(auto-fill,minmax(min(100%,320px),1fr))',
-                gap: 15,
-              }}
-            >
-              {shown.map(a => (
+            <div className="lf-markets-grid">
+              {shown.map(article => (
                 <button
-                  key={`${a.category}-${a.slug}`}
+                  key={`${article.category}-${article.slug}`}
+                  type="button"
+                  className="lf-markets-article-card"
+                  style={panel}
                   onClick={() =>
-                    void openArticle(a)
+                    void openArticle(article)
                   }
-                  style={{
-                    ...panel,
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    minHeight: 195,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 10,
-                  }}
                 >
                   <div
                     style={{
                       fontSize: 11,
-                      letterSpacing: 1.2,
-                      opacity: 0.55,
+                      letterSpacing: 1.1,
+                      opacity: 0.6,
                       display: 'flex',
                       alignItems: 'center',
                       gap: 6,
                     }}
                   >
                     <CalendarDays size={13} />
-                    {a.date} ·{' '}
-                    {a.category === 'daily'
-                      ? 'DAILY BRIEF'
-                      : a.category === 'bonds'
-                      ? 'BOND WEEKLY'
-                      : 'RESEARCH'}
+                    {article.date}
+                    {' · '}
+                    {categoryLabel(article.category)}
                   </div>
 
-                  <h3
-                    style={{
-                      fontSize: 19,
-                      lineHeight: 1.45,
-                      margin: 0,
-                    }}
-                  >
-                    {a.title}
-                  </h3>
+                  <h3>{article.title}</h3>
 
-                  <p
-                    style={{
-                      fontSize: 13,
-                      opacity: 0.65,
-                      lineHeight: 1.7,
-                      margin: 0,
-                      flex: 1,
-                    }}
-                  >
-                    {a.summary ||
-                      '開啟閱讀完整內容'}
+                  <p>
+                    {article.summary ||
+                      'Open to read the full article.'}
                   </p>
 
                   <div
                     style={{
                       fontSize: 12,
-                      opacity: 0.65,
+                      opacity: 0.7,
                       display: 'flex',
-                      gap: 6,
                       alignItems: 'center',
+                      gap: 5,
+                      marginTop: 'auto',
                     }}
                   >
                     Read Insight
-                    <ChevronDown
-                      size={13}
-                      style={{
-                        transform: 'rotate(-90deg)',
-                      }}
-                    />
+                    <ChevronRight size={14} />
                   </div>
                 </button>
               ))}
