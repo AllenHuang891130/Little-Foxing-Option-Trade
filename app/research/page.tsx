@@ -1,6 +1,6 @@
 'use client';
-import StrategyArticles from './StrategyArticles';
-import './strategy-articles.css';
+import ResearchArticles from './ResearchArticles';
+import './research-articles.css';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, FormEvent } from 'react';
@@ -61,7 +61,7 @@ function getError(data: unknown, status: number): string {
   return `Request failed (${status})`;
 }
 
-export default function Strategies() {
+export default function Research() {
   const [folder, setFolder] = useState('');
   const [expanded, setExpanded] = useState<string[]>([]);
   const [items, setItems] = useState<StorageItem[]>([]);
@@ -95,7 +95,7 @@ export default function Strategies() {
     setBusy(true);
     setError('');
     try {
-      const response = await request(`/strategy/files?folder=${encodeURIComponent(target)}`);
+      const response = await request(`/research/files?folder=${encodeURIComponent(target)}`);
       const data: { items?: StorageItem[] } = await response.json();
       setItems((data.items || []).filter(item =>
         item.name !== '.folder' && item.name !== '.emptyFolderPlaceholder' && !item.name.endsWith('.lfarticle.json') && item.name !== '.lf-assets' && item.name !== '.lf-articles'
@@ -106,7 +106,7 @@ export default function Strategies() {
   }, [request]);
 
   const loadTree = useCallback(async () => {
-    const response = await request('/strategy/tree');
+    const response = await request('/research/tree');
     const data: { items?: StorageItem[] } = await response.json();
     const result = (data.items || []).filter(item =>
       item.name !== '.folder' && item.name !== '.emptyFolderPlaceholder' && !item.name.endsWith('.lfarticle.json') && item.name !== '.lf-assets' && item.name !== '.lf-articles'
@@ -129,7 +129,7 @@ export default function Strategies() {
     setBusy(true);
     setError('');
     try {
-      await request('/strategy/move', {
+      await request('/research/move', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           source: '.admin-password-check', destination: '.admin-password-check'
@@ -193,7 +193,7 @@ export default function Strategies() {
     void perform(async () => {
       const all = await loadTree();
       if (all.some(item => item.path === path)) throw new Error('Folder already exists.');
-      await postJson('/strategy/folder', { path });
+      await postJson('/research/folder', { path });
     }, 'Folder created successfully.');
   }
 
@@ -212,7 +212,7 @@ export default function Strategies() {
         const body = new FormData();
         body.append('file', file);
         body.append('folder', targetFolder);
-        await request('/strategy/upload', { method: 'POST', body }, adminPassword);
+        await request('/research/upload', { method: 'POST', body }, adminPassword);
       }
     }, 'Files uploaded successfully.');
   }
@@ -221,7 +221,7 @@ export default function Strategies() {
     setBusy(true);
     setError('');
     try {
-      const response = await request(`/strategy/download?path=${encodeURIComponent(path)}`);
+      const response = await request(`/research/download?path=${encodeURIComponent(path)}`);
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -240,7 +240,7 @@ export default function Strategies() {
     setBusy(true);
     setError('');
     try {
-      const response = await request(`/strategy/download?path=${encodeURIComponent(path)}`);
+      const response = await request(`/research/download?path=${encodeURIComponent(path)}`);
       const blob = await response.blob();
       const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
       setPreview({ name: item.name, url });
@@ -258,8 +258,8 @@ export default function Strategies() {
     const folderItem = isFolder(item);
     void perform(async () => {
       await checkDestination(destination, source, folderItem);
-      if (folderItem) await postJson('/strategy/folder/move', { source, destination });
-      else await postJson('/strategy/move', { source, destination });
+      if (folderItem) await postJson('/research/folder/move', { source, destination });
+      else await postJson('/research/move', { source, destination });
     }, `${folderItem ? 'Folder' : 'File'} renamed successfully.`);
   }
 
@@ -279,8 +279,8 @@ export default function Strategies() {
         throw new Error('Destination folder does not exist. Create it first.');
       }
       await checkDestination(destination, source, folderItem);
-      if (folderItem) await postJson('/strategy/folder/move', { source, destination });
-      else await postJson('/strategy/move', { source, destination });
+      if (folderItem) await postJson('/research/folder/move', { source, destination });
+      else await postJson('/research/move', { source, destination });
     }, `${folderItem ? 'Folder' : 'File'} moved successfully.`);
   }
 
@@ -293,8 +293,8 @@ export default function Strategies() {
     if (!window.confirm(question)) return;
     if (folderItem && window.prompt(`Type DELETE to confirm deletion of "${item.name}":`) !== 'DELETE') return;
     void perform(async () => {
-      if (folderItem) await postJson('/strategy/folder', { folder: path }, 'DELETE');
-      else await postJson('/strategy/files', { paths: [path] }, 'DELETE');
+      if (folderItem) await postJson('/research/folder', { folder: path }, 'DELETE');
+      else await postJson('/research/files', { paths: [path] }, 'DELETE');
     }, `${folderItem ? 'Folder' : 'File'} deleted successfully.`);
   }
 
@@ -355,7 +355,7 @@ export default function Strategies() {
       {folderItem && opened && !query && <div className="lf-tree-children" style={{ marginLeft: Math.min(depth, 8) * 14 + 12 }}>
         {childItems(path).map(child => renderItem(child, child.path || joinPath(path, child.name), depth + 1))}
         <div className="lf-tree-articles">
-          <StrategyArticles folder={path} adminPassword={adminPassword}
+          <ResearchArticles folder={path} adminPassword={adminPassword}
             hasOtherItems={childItems(path).length > 0}
             onChanged={() => { void load(''); void loadTree().catch(() => {}); }} />
         </div>
@@ -365,9 +365,9 @@ export default function Strategies() {
 
   return (
     <>
-      <div className="eyebrow">TRADING / STRATEGIES</div>
-      <h1 className="pagetitle">Strategy Lab</h1>
-      <p className="subtitle">Explore trading strategies, backtests, execution research, and implementation notes.</p>
+      <div className="eyebrow">KNOWLEDGE / LITERATURE</div>
+      <h1 className="pagetitle">Research Library</h1>
+      <p className="subtitle">Browse academic papers, trading strategies, research reports, and notes.</p>
 
       {!admin && showAdminLogin && <div className="panel"
         style={{ padding: 20, marginBottom: 16, maxWidth: 460 }}>
@@ -437,7 +437,7 @@ export default function Strategies() {
            {visible.map(item => renderItem(item, item.path || item.name, 0))}
          </div>
          {!query && <div className="lf-root-articles">
-           <StrategyArticles folder="" adminPassword={adminPassword}
+           <ResearchArticles folder="" adminPassword={adminPassword}
              hasOtherItems={rootItems.length > 0}
              onChanged={() => { void load(''); void loadTree().catch(() => {}); }} />
          </div>}
