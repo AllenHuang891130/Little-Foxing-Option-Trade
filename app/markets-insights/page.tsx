@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
@@ -39,12 +38,11 @@ const API = (
 const tabs: {
   key: Category | 'all';
   label: string;
-  sub: string;
 }[] = [
-  { key: 'all', label: 'All Insights', sub: '所有內容' },
-  { key: 'daily', label: 'Daily Brief', sub: '每日國際金融早報' },
-  { key: 'bonds', label: 'Bond Weekly', sub: '全球債市週報' },
-  { key: 'research', label: 'My Research', sub: '個人研究與觀點' },
+  { key: 'all', label: 'All Insights' },
+  { key: 'daily', label: 'Daily Brief' },
+  { key: 'bonds', label: 'Bond Weekly' },
+  { key: 'research', label: 'My Research' },
 ];
 
 const panel: React.CSSProperties = {
@@ -688,6 +686,9 @@ export default function MarketsInsightsPage() {
                   ...panel,
                   textAlign: 'left',
                   cursor: 'pointer',
+                  minHeight: 58,
+                  display: 'flex',
+                  alignItems: 'center',
                   borderColor:
                     tab === t.key
                       ? 'var(--foreground,#aaa)'
@@ -707,15 +708,7 @@ export default function MarketsInsightsPage() {
                   {t.label}
                 </div>
 
-                <div
-                  style={{
-                    fontSize: 12,
-                    opacity: 0.55,
-                    marginTop: 5,
-                  }}
-                >
-                  {t.sub}
-                </div>
+
               </button>
             ))}
           </nav>
