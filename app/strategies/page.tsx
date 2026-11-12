@@ -5,8 +5,8 @@ import './strategy-articles.css';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, FormEvent } from 'react';
 import {
-  ArrowLeft, ChevronDown, ChevronRight, Download, ExternalLink, FileText, Folder, FolderPlus,
-  Home, LockKeyhole, LogOut, MoveRight, Pencil, RefreshCw,
+  ChevronDown, ChevronRight, Download, ExternalLink, FileText, Folder, FolderPlus,
+  LockKeyhole, LogOut, MoveRight, Pencil, RefreshCw,
   Search, Trash2, Upload, X
 } from 'lucide-react';
 
@@ -313,13 +313,6 @@ export default function Strategies() {
     setMessage('');
   }
 
-  function navigateTo(path: string) {
-    setFolder(path);
-    if (path) setExpanded(previous => previous.includes(path) ? previous : [...previous, path]);
-    setSearch('');
-    setMessage('');
-  }
-
   const query = search.trim().toLocaleLowerCase();
   const sorted = (values: StorageItem[]) => [...values].sort((a, b) => {
     if (isFolder(a) !== isFolder(b)) return isFolder(a) ? -1 : 1;
@@ -393,21 +386,20 @@ export default function Strategies() {
 
 
       <div className="panel" style={{ padding: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
-            <button type="button" style={buttonStyle} onClick={() => { navigateTo(''); setExpanded([]); }}>
-              <Home size={16} /> Home
-            </button>
-            {folder && <button type="button" style={buttonStyle}
-              onClick={() => navigateTo(parentPath(folder))}>
-              <ArrowLeft size={16} /> Back
-            </button>}
-            <span className="muted small" style={{ overflowWrap: 'anywhere' }}>
-              / {folder || 'All Strategy Files'}
-            </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10,
+          flexWrap: 'wrap', marginBottom: query ? 12 : 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10,
+            padding: '10px 12px', border: '1px solid var(--border, #8885)',
+            borderRadius: 9, flex: '1 1 240px', minWidth: 0 }}>
+            <Search size={18} style={{ flexShrink: 0 }} />
+            <input value={search} onChange={event => setSearch(event.target.value)}
+              aria-label="Search articles and folders"
+              placeholder="Search articles and folders..."
+              style={{ border: 'none', outline: 'none', background: 'transparent',
+                color: 'inherit', width: '100%', minWidth: 0, fontSize: 13 }} />
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginLeft: 'auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8,
+            flexWrap: 'wrap', justifyContent: 'flex-end', marginLeft: 'auto' }}>
             {admin && <>
               <button type="button" style={buttonStyle} disabled={busy} onClick={() => createFolder()}>
                 <FolderPlus size={16} /> New Folder
@@ -417,7 +409,7 @@ export default function Strategies() {
                 <Upload size={16} /> Upload Files
               </button>
             </>}
-            <button type="button" title="Refresh" style={iconButton} disabled={busy}
+            <button type="button" title="Refresh" aria-label="Refresh" style={iconButton} disabled={busy}
               onClick={() => { void load(''); void loadTree().catch(() => {}); }}>
               <RefreshCw size={17} />
             </button>
@@ -434,17 +426,9 @@ export default function Strategies() {
             }} />
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
-          border: '1px solid var(--border, #8885)', borderRadius: 9, marginBottom: 8 }}>
-          <Search size={18} />
-          <input value={search} onChange={event => setSearch(event.target.value)}
-            placeholder="Search all files and folders..."
-            style={{ border: 'none', outline: 'none', background: 'transparent',
-              color: 'inherit', width: '100%' }} />
-        </div>
-        <p className="muted small" style={{ marginBottom: 16 }}>
-          {query ? `Global search: ${visible.length} matching items` : 'Click a folder to expand its contents'}
-        </p>
+        {query && <p className="muted small" style={{ marginBottom: 12 }}>
+          Global search: {visible.length} matching items
+        </p>}
         {error && <p style={{ color: '#dc5252', marginBottom: 12, overflowWrap: 'anywhere' }}>{error}</p>}
         {message && <p style={{ marginBottom: 12 }}>{message}</p>}
         {busy && <p className="muted small">Loading...</p>}
