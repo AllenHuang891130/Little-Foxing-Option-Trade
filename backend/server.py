@@ -23,8 +23,10 @@ import research_storage as research
 import v4_engine as v4
 from markets_insights_api import router as markets_insights_router
 from research_articles_api import router as research_articles_router
+from strategy_articles_api import router as strategy_articles_router
 
 app = FastAPI(title="Quant Research Lab V4 API", version="0.3")
+app.include_router(strategy_articles_router)
 app.include_router(markets_insights_router)
 app.include_router(research_articles_router)
 # Explicitly allow the public Vercel frontend and local development.
