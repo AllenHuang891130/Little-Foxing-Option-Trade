@@ -1,10 +1,11 @@
 'use client';
 import ResearchArticles from './ResearchArticles';
+import './research-articles.css';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, FormEvent } from 'react';
 import {
-  ArrowLeft, Download, ExternalLink, FileText, Folder, FolderPlus,
+  ArrowLeft, ChevronDown, ChevronRight, Download, ExternalLink, FileText, Folder, FolderPlus,
   Home, LockKeyhole, LogOut, MoveRight, Pencil, RefreshCw,
   Search, Trash2, Upload, X
 } from 'lucide-react';
@@ -62,6 +63,7 @@ function getError(data: unknown, status: number): string {
 
 export default function Research() {
   const [folder, setFolder] = useState('');
+  const [expanded, setExpanded] = useState<string[]>([]);
   const [items, setItems] = useState<StorageItem[]>([]);
   const [tree, setTree] = useState<StorageItem[]>([]);
   const [search, setSearch] = useState('');
@@ -113,7 +115,7 @@ export default function Research() {
     return result;
   }, [request]);
 
-  useEffect(() => { void load(folder); }, [folder, load]);
+  useEffect(() => { void load(''); }, [load]);
   useEffect(() => {
     void loadTree().catch(() => { /* Folder browsing remains available */ });
   }, [loadTree]);
@@ -150,7 +152,7 @@ export default function Research() {
     try {
       await action();
       setMessage(success);
-      await Promise.all([load(folder), loadTree()]);
+      await Promise.all([load(''), loadTree()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Operation failed');
     } finally { setBusy(false); }
@@ -182,12 +184,12 @@ export default function Research() {
     }
   }
 
-  function createFolder() {
+  function createFolder(targetFolder = folder) {
     if (!admin) return;
     const name = window.prompt('New folder name:')?.trim();
     if (!name) return;
     if (!validName(name)) { setError('Invalid folder name.'); return; }
-    const path = joinPath(folder, name);
+    const path = joinPath(targetFolder, name);
     void perform(async () => {
       const all = await loadTree();
       if (all.some(item => item.path === path)) throw new Error('Folder already exists.');
@@ -195,21 +197,21 @@ export default function Research() {
     }, 'Folder created successfully.');
   }
 
-  function uploadFiles(files: File[]) {
+  function uploadFiles(files: File[], targetFolder = folder) {
     if (!admin || !files.length) return;
     void perform(async () => {
       const all = await loadTree();
       for (const file of files) {
         if (file.size > 25 * 1024 * 1024) throw new Error(`${file.name} exceeds 25 MB.`);
         if (!validName(file.name)) throw new Error(`Invalid filename: ${file.name}`);
-        if (all.some(item => item.path === joinPath(folder, file.name))) {
+        if (all.some(item => item.path === joinPath(targetFolder, file.name))) {
           throw new Error(`File already exists: ${file.name}`);
         }
       }
       for (const file of files) {
         const body = new FormData();
         body.append('file', file);
-        body.append('folder', folder);
+        body.append('folder', targetFolder);
         await request('/research/upload', { method: 'POST', body }, adminPassword);
       }
     }, 'Files uploaded successfully.');
@@ -296,20 +298,77 @@ export default function Research() {
     }, `${folderItem ? 'Folder' : 'File'} deleted successfully.`);
   }
 
+  function toggleFolder(path: string) {
+    if (search.trim()) {
+      const segments = path.split('/');
+      setExpanded(segments.map((_, index) => segments.slice(0, index + 1).join('/')));
+      setFolder(path);
+      setSearch('');
+      return;
+    }
+    setFolder(path);
+    setExpanded(previous => previous.includes(path)
+      ? previous.filter(value => value !== path && !value.startsWith(path + '/'))
+      : [...previous, path]);
+    setMessage('');
+  }
+
   function navigateTo(path: string) {
     setFolder(path);
+    if (path) setExpanded(previous => previous.includes(path) ? previous : [...previous, path]);
     setSearch('');
     setMessage('');
   }
 
   const query = search.trim().toLocaleLowerCase();
-  const visible: StorageItem[] = (query ? tree : items)
-    .filter(item => (query ? (item.path || item.name) : item.name)
-      .toLocaleLowerCase().includes(query))
-    .sort((a, b) => {
-      if (isFolder(a) !== isFolder(b)) return isFolder(a) ? -1 : 1;
-      return (a.path || a.name).localeCompare(b.path || b.name);
-    });
+  const sorted = (values: StorageItem[]) => [...values].sort((a, b) => {
+    if (isFolder(a) !== isFolder(b)) return isFolder(a) ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  const allVisible = sorted(tree.filter(item => (item.path || item.name).toLocaleLowerCase().includes(query)));
+  const rootItems = sorted(items.filter(item => !item.path || parentPath(item.path) === ''));
+  const childItems = (path: string) => sorted(tree.filter(item =>
+    parentPath(item.path || item.name) === path && (item.path || item.name) !== path
+  ));
+  const visible = query ? allVisible : rootItems;
+
+  function renderItem(item: StorageItem, path: string, depth: number) {
+    const folderItem = isFolder(item);
+    const opened = expanded.includes(path);
+    return <div key={path} className="lf-tree-node">
+      <div className="lf-tree-row" style={{ marginLeft: Math.min(depth, 8) * 14 }}>
+        {folderItem ? <Folder size={20} /> : <FileText size={20} />}
+        <button type="button" className="lf-tree-name" aria-expanded={folderItem ? opened : undefined}
+          onClick={() => folderItem ? toggleFolder(path) : isPdf(item) ? void openPdf(item, path) : void downloadFile(item, path)}>
+          <strong>{item.name}</strong>
+          <small className="muted">{query ? path : folderItem ? 'Folder' : `${((item.metadata?.size || 0) / 1024).toFixed(1)} KB`}</small>
+        </button>
+        {folderItem && (opened ? <ChevronDown size={18} /> : <ChevronRight size={18} />)}
+        <div className="lf-tree-tools">
+          {!folderItem && <button type="button" title="Download" style={iconButton} disabled={busy}
+            onClick={() => void downloadFile(item, path)}><Download size={16} /></button>}
+          {admin && <>
+            {folderItem && <button type="button" title="在此資料夾新增子資料夾" style={iconButton} disabled={busy}
+              onClick={() => createFolder(path)}><FolderPlus size={16} /></button>}
+            <button type="button" title="Rename" style={iconButton} disabled={busy}
+              onClick={() => renameItem(item, path)}><Pencil size={16} /></button>
+            <button type="button" title="Move" style={iconButton} disabled={busy}
+              onClick={() => moveItem(item, path)}><MoveRight size={16} /></button>
+            <button type="button" title="Delete" style={iconButton} disabled={busy}
+              onClick={() => deleteItem(item, path)}><Trash2 size={16} /></button>
+          </>}
+        </div>
+      </div>
+      {folderItem && opened && !query && <div className="lf-tree-children" style={{ marginLeft: Math.min(depth, 8) * 14 + 12 }}>
+        {childItems(path).map(child => renderItem(child, child.path || joinPath(path, child.name), depth + 1))}
+        <div className="lf-tree-articles">
+          <ResearchArticles folder={path} adminPassword={adminPassword}
+            hasOtherItems={childItems(path).length > 0}
+            onChanged={() => { void load(''); void loadTree().catch(() => {}); }} />
+        </div>
+      </div>}
+    </div>;
+  }
 
   return (
     <>
@@ -337,7 +396,7 @@ export default function Research() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
-            <button type="button" style={buttonStyle} onClick={() => navigateTo('')}>
+            <button type="button" style={buttonStyle} onClick={() => { navigateTo(''); setExpanded([]); }}>
               <Home size={16} /> Home
             </button>
             {folder && <button type="button" style={buttonStyle}
@@ -350,7 +409,7 @@ export default function Research() {
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginLeft: 'auto' }}>
             {admin && <>
-              <button type="button" style={buttonStyle} disabled={busy} onClick={createFolder}>
+              <button type="button" style={buttonStyle} disabled={busy} onClick={() => createFolder()}>
                 <FolderPlus size={16} /> New Folder
               </button>
               <button type="button" style={buttonStyle} disabled={busy}
@@ -359,7 +418,7 @@ export default function Research() {
               </button>
             </>}
             <button type="button" title="Refresh" style={iconButton} disabled={busy}
-              onClick={() => { void load(folder); void loadTree().catch(() => {}); }}>
+              onClick={() => { void load(''); void loadTree().catch(() => {}); }}>
               <RefreshCw size={17} />
             </button>
             {admin ? <button type="button" style={buttonStyle} onClick={() => {
@@ -384,48 +443,21 @@ export default function Research() {
               color: 'inherit', width: '100%' }} />
         </div>
         <p className="muted small" style={{ marginBottom: 16 }}>
-          {query ? `Global search: ${visible.length} matching items` : 'Showing current folder'}
+          {query ? `Global search: ${visible.length} matching items` : 'Click a folder to expand its contents'}
         </p>
         {error && <p style={{ color: '#dc5252', marginBottom: 12, overflowWrap: 'anywhere' }}>{error}</p>}
         {message && <p style={{ marginBottom: 12 }}>{message}</p>}
         {busy && <p className="muted small">Loading...</p>}
         
-        <div style={{ display: 'grid', gap: 8 }}>
-          {visible.map(item => {
-            const path = item.path || joinPath(folder, item.name);
-            const folderItem = isFolder(item);
-            return <div key={path} style={{ display: 'flex', alignItems: 'center',
-              gap: 12, padding: 12, flexWrap: 'wrap',
-              border: '1px solid var(--border, #8885)', borderRadius: 10 }}>
-              {folderItem ? <Folder size={22} /> : <FileText size={22} />}
-              <button type="button" style={{ border: 'none', background: 'transparent',
-                color: 'inherit', textAlign: 'left', cursor: 'pointer',
-                flex: '1 1 180px', minWidth: 0, overflowWrap: 'anywhere' }}
-                onClick={() => folderItem ? navigateTo(path) :
-                  isPdf(item) ? void openPdf(item, path) : void downloadFile(item, path)}>
-                <strong>{item.name}</strong>
-                <div className="muted small">{query ? path : folderItem ? 'Folder' :
-                  `${((item.metadata?.size || 0) / 1024).toFixed(1)} KB`}</div>
-              </button>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {!folderItem && <button type="button" title="Download" style={iconButton}
-                  disabled={busy} onClick={() => void downloadFile(item, path)}>
-                  <Download size={17} /></button>}
-                {admin && <>
-                  <button type="button" title="Rename" style={iconButton} disabled={busy}
-                    onClick={() => renameItem(item, path)}><Pencil size={17} /></button>
-                  <button type="button" title="Move" style={iconButton} disabled={busy}
-                    onClick={() => moveItem(item, path)}><MoveRight size={17} /></button>
-                  <button type="button" title="Delete" style={iconButton} disabled={busy}
-                    onClick={() => deleteItem(item, path)}><Trash2 size={17} /></button>
-                </>}
-              </div>
-            </div>;
-          })}
-        </div>
-        <ResearchArticles folder={folder} adminPassword={adminPassword}
-          hasOtherItems={visible.length > 0}
-          onChanged={() => { void load(folder); void loadTree(); }} />
+        <div className="lf-tree-list">
+           {visible.map(item => renderItem(item, item.path || item.name, 0))}
+         </div>
+         {!query && <div className="lf-root-articles">
+           <ResearchArticles folder="" adminPassword={adminPassword}
+             hasOtherItems={rootItems.length > 0}
+             onChanged={() => { void load(''); void loadTree().catch(() => {}); }} />
+         </div>}
+
       </div>
 
       {preview && <div role="dialog" aria-modal="true" aria-label="PDF preview"
