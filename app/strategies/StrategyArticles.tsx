@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, ClipboardEvent, ChangeEvent } from 'react';
-import { FileText, ImagePlus, Paperclip, Plus, Upload, ArrowLeft, Pencil, Trash2, Download } from 'lucide-react';
+import { ImagePlus, Paperclip, Plus, Upload, ArrowLeft, Pencil, Trash2, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import './strategy-articles.css';
@@ -131,6 +131,6 @@ export default function StrategyArticles({folder,adminPassword,onChanged,hasOthe
    <Markdown content={current.content||''}/>
    {!!current.attachments?.length&&<section className="lf-article-attachments"><h3>Attachments · 附件下載</h3>{current.attachments.map(a=><button type="button" style={btn} key={a.path} onClick={()=>void download(a)} disabled={busy}><Download size={16}/>{a.name}</button>)}</section>}
    {adminPassword&&<div className="lf-article-buttons"><button type="button" style={btn} onClick={()=>start(current)}><Pencil size={16}/> 編輯文章</button><button type="button" style={btn} onClick={()=>void remove()}><Trash2 size={16}/> 刪除文章</button></div>}
-  </article>:<div className="lf-article-cards">{articles.map(a=><button type="button" className="lf-article-card" key={a.path} onClick={()=>void open(a)} disabled={busy}><FileText size={22}/><span><strong>{a.title}</strong><small>{a.date} · {a.summary||'Markdown 策略文章'}</small></span></button>)}{articles.length===0&&!hasOtherItems&&!adminPassword&&<p className="muted small">This folder is empty</p>}</div>}
+  </article>:<div className="lf-article-cards">{articles.map(a=><button type="button" className="lf-article-card" key={a.path} onClick={()=>void open(a)} disabled={busy}><span className="lf-card-date">{a.date} · STRATEGY</span><span><strong>{a.title}</strong><small>{a.summary||'Markdown 策略文章'}</small></span></button>)}{articles.length===0&&!hasOtherItems&&!adminPassword&&<p className="muted small">This folder is empty</p>}</div>}
  </div>
 }
